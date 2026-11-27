@@ -1,12 +1,12 @@
 [project]
 name = "clipcraft-local"
-version = "1.0.0"
-description = "Minimal offline-first YouTube auto-clipping tool with highlighted captions"
+version = "2.0.0"
+description = "Local ClipCraft by WPM — Offline-first video clipper with universal face-tracked Cam Frame and highlighted captions"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.32.0",
-    "yt-dlp[default]>=2025.1.0",
+    "yt-dlp[default]>=2025.11.0",
     "faster-whisper>=1.1.0",
     "numpy>=1.26.0",
     "scipy>=1.13.0",

@@ -5,7 +5,7 @@
     <strong>Turn long YouTube, Twitch, Kick &amp; Facebook videos into viral short clips with word-by-word highlighted captions — 100% locally on your own computer!</strong>
   </p>
   <p>
-    No paid APIs • No cloud AI keys • Works on minimal PCs • Face-tracked Streamer Corner Cam • English, Hindi &amp; Hinglish Captions
+    No paid APIs • No cloud AI keys • Works on minimal PCs • Universal Human-Face Cam Frame • English, Hindi &amp; Hinglish Captions
   </p>
 </div>
 
@@ -23,8 +23,9 @@
 - **Word-by-Word Highlighted Captions**:
   - Uses existing YouTube captions first (**0% AI!**), or falls back to an **inbuilt tiny offline speech model** (`faster-whisper-tiny`, CPU-friendly) only when a video has no captions.
   - Supports **Auto**, **English**, **Hindi (`हिंदी`)**, and **Hinglish**!
-- **Face-Tracked Streamer Corner Cam (PiP)**:
-  - Automatically detects the streamer's face inside their corner webcam, keeps them cleanly framed in a tiny `9:16` corner box, keeps gameplay centered, and automatically hides the corner cam during full-screen cutscenes!
+- **Universal Real-Human Streamer Cam Frame (PiP)**:
+  - Automatically finds the **real human streamer face anywhere in the source video** (top/bottom corners, top-center, bottom-center, mid-left/mid-right edges, center, or floating cams — while filtering out in-game NPCs and static posters!).
+  - Smoothly tracks their head and fits them cleanly edge-to-edge into your Cam Frame corner with **no blurry dead bars**, keeps gameplay centered, and automatically hides the Cam Frame during cutscenes.
 - **Works With 1,000+ Sites & Local Videos**:
   - Paste links from **YouTube**, **Twitch**, **Kick**, **Facebook**, **X / Twitter**, **Instagram**, **TikTok**, **Vimeo**, **Rumble**, or upload a **Local Video** directly from your PC.
 - **Pre-Edited Reel Captioner**:
@@ -36,81 +37,73 @@
 
 ## 📸 Screenshots
 
-| Options, Streamer Corner Cam & 1-Click YouTube Sign-In | Pre-Edited Reel Captioner & Recent Exports |
+| Options, Streamer Cam Frame & 1-Click YouTube Sign-In | Pre-Edited Reel Captioner & Recent Exports |
 | :---: | :---: |
 | ![Options and Streamer Cam](screenshots/2.png) | ![Pre-Edited Reel Captioner](screenshots/3.png) |
 
-| Face-Tracked 9:16 Clips with Corner Cam | Copy-Paste Titles, Captions & Hashtags |
+| Face-Tracked 9:16 Clips with Cam Frame | Copy-Paste Titles, Captions & Hashtags |
 | :---: | :---: |
 | ![Generated Clips](screenshots/4.png) | ![Upload Copy Kit](screenshots/5.png) |
 
 ---
 
-## 🧒 Super Easy Setup Guide (Step-by-Step for Beginners!)
+## ⚡ Super Easy 1-Command Setup (Beginner Friendly!)
 
-Follow these simple steps on **Windows 10 / 11**. Even if you have never coded before, you can get this running in under 5 minutes!
+You do **not** need to be a programmer to run this. Just follow these 2 tiny steps on **Windows 10 / 11**!
 
-### Step 1: Install 3 Free Tools (One Time Only)
+### Option 1: Double-Click Setup (No Typing Needed!)
 
-Open **PowerShell** (click the Windows Start menu, type `PowerShell`, and press **Enter**), then copy-paste these 3 commands one by one:
-
-1. **Install Python 3.12**:
-   ```powershell
-   winget install Python.Python.3.12
-   ```
-2. **Install FFmpeg** *(used to cut and render videos)*:
-   ```powershell
-   winget install Gyan.FFmpeg
-   ```
-3. **Install Node.js** *(helps download YouTube videos smoothly)*:
-   ```powershell
-   winget install OpenJS.NodeJS.LTS
-   ```
-
-> **Tip:** After installing those three, **close PowerShell and open a fresh PowerShell window** so Windows knows about the new commands!
-
-*(Don't have `winget`? You can download them normally from [python.org](https://www.python.org/downloads/), [ffmpeg.org](https://ffmpeg.org/download.html), and [nodejs.org](https://nodejs.org/) — just check **"Add Python to PATH"** during Python setup!)*
+1. **Download this project**:
+   - Click the green **`Code`** button at the top of [WorldPixelMap/ClipCraft-by-WPM](https://github.com/WorldPixelMap/ClipCraft-by-WPM) → click **`Download ZIP`**.
+   - Right-click the ZIP file → **Extract All...** anywhere (for example `C:\ClipCraft`).
+2. **Double-click `start.bat`** inside the extracted folder!
+   - On the very first run, `start.bat` automatically runs **`install.bat`** to install **FFmpeg**, **Node.js**, **Python 3.12**, create `.venv`, and install all packages from [`requirements.txt`](requirements.txt) for you!
+   - Once finished, your browser opens **`http://127.0.0.1:8000`** automatically!
 
 ---
 
-### Step 2: Download This Project
+### Option 2: 1-Command Setup in Terminal
 
-Either click **Code → Download ZIP** on [GitHub](https://github.com/WorldPixelMap) and unzip it anywhere (for example `C:\ClipCraft`), **or** clone your repository in PowerShell:
+Open **PowerShell** (or **Command Prompt**) inside the project folder and run **one single command**:
 
+**Clone + open folder (if using Git):**
 ```powershell
-git clone <your-github-repo-url>
-cd <project-folder>
+git clone https://github.com/WorldPixelMap/ClipCraft-by-WPM.git
+cd ClipCraft-by-WPM
 ```
 
-*(If you unzipped the folder manually, open PowerShell inside that folder or `cd` into it.)*
+**Install EVERYTHING in 1 command (Windows):**
+```powershell
+.\install.bat
+```
+*(This automatically checks/installs **FFmpeg**, **Node.js LTS**, **Python 3.12**, creates `.venv`, installs every package inside [`requirements.txt`](requirements.txt), and caches the lightweight face tracker! Wait 1–2 minutes the first time.)*
+
+**Start the app:**
+```powershell
+.\start.bat
+```
+*(Or double-click `start.bat` inside the folder!)*
 
 ---
 
-### Step 3: Create the Virtual Environment & Install Packages
+<details>
+<summary><strong>macOS / Linux Setup or Manual `requirements.txt` Install (Click to expand)</strong></summary>
 
-In PowerShell inside the project folder, copy-paste these two lines:
+1. **One-command installer (macOS / Linux):**
+   ```bash
+   bash install.sh
+   ```
+   *(Requires `ffmpeg` via `brew install ffmpeg node` on macOS or `sudo apt install ffmpeg nodejs python3-venv` on Ubuntu/Debian.)*
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\pip install -r requirements.txt
-```
+2. **Install Python requirements manually into an existing Python 3.11–3.13 environment:**
+   ```bash
+   pip install -r requirements.txt
+   python run.py
+   ```
 
-Wait 1–2 minutes while Python installs the required libraries (`fastapi`, `uvicorn`, `yt-dlp`, `faster-whisper`, `opencv-python-headless`, `numpy`, `scipy`, `pysubs2`). You only ever have to do this once!
+</details>
 
----
-
-### Step 4: Start the App!
-
-Just **double-click `start.bat`** inside the project folder!
-
-*(Or run it from PowerShell inside the project folder:)*
-```powershell
-.\.venv\Scripts\python.exe run.py
-```
-
-Your browser will automatically open **`http://127.0.0.1:8000`**!
-
-> **Note on First Use:** The first time a video needs the offline speech model (`faster-whisper-tiny`, ~75 MB) or face tracker (`YuNet`, ~227 KB), the app automatically caches them inside the `models/` folder. After that, everything works completely offline!
+> **Note on First Clip:** The very first time a video has no subtitles and falls back to offline transcription, the app automatically downloads and caches `faster-whisper-tiny` (~75 MB) inside `models/`. After that, everything works completely offline!
 
 ---
 
@@ -123,9 +116,9 @@ Your browser will automatically open **`http://127.0.0.1:8000`**!
 3. **Choose Format & Captions**:
    - **Clip Format**: Pick `9:16 Shorts`, `9:16 Blur` (great for tutorials), or `16:9 Wide`.
    - **Highlighted Captions**: Keep **Word Highlight ON**, pick your highlight color (Yellow, Cyan, Lime, or Coral), and pick your **Caption Language** (`Auto`, `English`, `Hindi`, or `Hinglish`).
-4. **Optional — Streamer Corner Cam (PiP)**:
-   - Watching a gaming streamer whose facecam is in a corner? Under **Source Cam Corner (Face-Tracked)**, pick **`Auto-Detect Face Corner (Recommended)`** (or pick their exact corner like `Top-Right of Stream` or `Bottom-Left of Stream`), then choose which corner of your clip you want their tiny `9:16` cam to appear in!
-5. **Click the Big Yellow Button**: Click **Pick Best Moments & Generate Clips**.
+4. **Optional — Streamer Cam Frame (PiP)**:
+   - Clipping a gaming stream or reaction video? Under **Detect Real Human Face From**, pick **`Auto-Detect Real Face (Anywhere — Recommended)`** — or choose a specific area (`Top-Left`, `Top-Right`, `Bottom-Left`, `Bottom-Right`, `Top-Center`, `Bottom-Center`, `Mid-Left`, `Mid-Right`, or `Center`) — then pick which corner under **Place Cam Frame In**!
+5. **Click the Big Yellow Button**: Click **Pick Best Moments & Generate Clips**. Live progress and generated clips appear directly underneath!
 6. **Preview, Copy & Download**:
    - Watch your clips directly in the browser.
    - Switch between **YouTube** and **Facebook** inside **Upload Copy Kit** and click **Copy Full Post** to copy the title, caption, and hashtags in one click.
@@ -169,8 +162,8 @@ You do **not** always need to sign in — many videos work immediately without l
 │   ├── youtube_auth.py     # 1-click isolated YouTube sign-in & cookie exporter
 │   ├── moment_detector.py  # 100% Zero-AI highlight ranker (heatmap + audio DSP + hooks)
 │   ├── caption_engine.py   # Word-sync engine, Hinglish transliterator & ASS karaoke builder
-│   ├── face_tracker.py     # Offline CPU YuNet face tracker & webcam border detector
-│   ├── video_renderer.py   # FFmpeg reframer, 9:16 corner PiP overlay & caption burner
+│   ├── face_tracker.py     # Offline CPU YuNet real-human face tracker & box detector
+│   ├── video_renderer.py   # FFmpeg reframer, edge-to-edge Cam Frame PiP & caption burner
 │   ├── social_suggester.py # Zero-AI Title, Caption & Hashtag generator
 │   └── models.py           # Pydantic request/response schemas
 ├── static/
@@ -180,11 +173,15 @@ You do **not** always need to sign in — many videos work immediately without l
 ├── screenshots/            # UI & output previews (1.png – 5.png)
 ├── tests/
 │   └── test_clipper.py     # Automated unit & synthetic pipeline test suite
-├── favicon.png             # Project icon
-├── start.bat               # One-click Windows launcher
+├── install.bat             # One-command / one-click Windows installer wrapper
+├── install.ps1             # Automated Windows setup (FFmpeg, Node.js, Python, .venv, pip)
+├── install.sh              # One-command macOS / Linux installer
+├── start.bat               # One-click Windows launcher (auto-installs on first run)
 ├── run.py                  # Cross-directory Python entrypoint
 ├── requirements.txt        # Python dependencies
-└── pyproject.toml          # Project configuration
+├── pyproject.toml          # Project configuration
+├── favicon.png             # Project icon
+└── LICENSE                 # Proprietary Use-Only License
 ```
 
 ---
