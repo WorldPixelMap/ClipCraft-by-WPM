@@ -1,5 +1,33 @@
 const $ = (id) => document.getElementById(id);
 
+const PAYPAL_CONFIG = {
+  businessEmail: "hmjsarkar@gmail.com",
+  hostedButtonId: "", // Optional: set PayPal hosted_button_id to override email link
+  paypalMeHandle: "", // Optional: set PayPal.Me handle (e.g. "hmjsarkar") to use paypal.me
+  itemName: "Support Local ClipCraft by WPM",
+  currencyCode: "USD",
+};
+
+function buildPayPalDonateUrl(amount) {
+  const numericAmt = Number(amount);
+  const hasAmt = Number.isFinite(numericAmt) && numericAmt > 0;
+  if (PAYPAL_CONFIG.paypalMeHandle) {
+    const slug = PAYPAL_CONFIG.paypalMeHandle.replace(/^\/+|\/+$/g, "");
+    return hasAmt ? `https://paypal.me/${slug}/${numericAmt}${PAYPAL_CONFIG.currencyCode}` : `https://paypal.me/${slug}`;
+  }
+  const params = new URLSearchParams();
+  if (PAYPAL_CONFIG.hostedButtonId) {
+    params.set("hosted_button_id", PAYPAL_CONFIG.hostedButtonId);
+  } else {
+    params.set("business", PAYPAL_CONFIG.businessEmail);
+    params.set("cmd", "_donations");
+    params.set("item_name", PAYPAL_CONFIG.itemName);
+    params.set("currency_code", PAYPAL_CONFIG.currencyCode);
+    if (hasAmt) params.set("amount", String(numericAmt));
+  }
+  return `https://www.paypal.com/donate/?${params.toString()}`;
+}
+
 const state = {
   numClips: 3,
   highlightColor: "yellow",
@@ -13,6 +41,7 @@ const state = {
   reelLanguage: "auto",
   reelColor: "yellow",
   reelAspect: "original",
+  donateAmount: "5",
   eventSource: null,
   ytAuthTimer: null,
 };
@@ -752,6 +781,57 @@ document.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll("#reelAspectGroup .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
     });
   });
+
+  function syncDonateCheckoutLink() {
+    const rawAmt =
+      state.donateAmount === "custom" ? $("donateCustomInput").value.trim() : state.donateAmount;
+    const valid = Number(rawAmt) > 0 ? Number(rawAmt) : null;
+    const url = buildPayPalDonateUrl(valid);
+    const goBtn = $("paypalDonateGoBtn");
+    if (goBtn) {
+      goBtn.href = url;
+      goBtn.textContent = valid ? `Continue to PayPal ($${valid}) →` : "Continue to PayPal →";
+    }
+  }
+
+  if ($("footerDonateLink")) {
+    $("footerDonateLink").href = buildPayPalDonateUrl(null);
+  }
+  if ($("paypalEmailText")) {
+    $("paypalEmailText").textContent = PAYPAL_CONFIG.businessEmail;
+  }
+
+  if ($("donatePill") && $("donateModal")) {
+    $("donatePill").addEventListener("click", () => {
+      syncDonateCheckoutLink();
+      $("donateModal").classList.remove("hidden");
+    });
+    $("closeDonateModalBtn").addEventListener("click", () => {
+      $("donateModal").classList.add("hidden");
+    });
+    $("donateModal").addEventListener("click", (e) => {
+      if (e.target === $("donateModal")) $("donateModal").classList.add("hidden");
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !$("donateModal").classList.contains("hidden")) {
+        $("donateModal").classList.add("hidden");
+      }
+    });
+    document.querySelectorAll("#donateAmountGroup .seg-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.donateAmount = btn.dataset.amt;
+        document.querySelectorAll("#donateAmountGroup .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        const isCustom = state.donateAmount === "custom";
+        $("donateCustomWrap").classList.toggle("hidden", !isCustom);
+        if (isCustom) $("donateCustomInput").focus();
+        syncDonateCheckoutLink();
+      });
+    });
+    $("donateCustomInput").addEventListener("input", syncDonateCheckoutLink);
+    $("copyPaypalEmailBtn").addEventListener("click", (e) =>
+      copyText(e.currentTarget, PAYPAL_CONFIG.businessEmail, "Copy")
+    );
+  }
 
   $("reelForm").addEventListener("submit", async (e) => {
     e.preventDefault();

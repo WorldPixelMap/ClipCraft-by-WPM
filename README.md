@@ -7,6 +7,11 @@
   <p>
     No paid APIs • No cloud AI keys • Works on minimal PCs • Universal Human-Face Cam Frame • English, Hindi &amp; Hinglish Captions
   </p>
+  <p>
+    <a href="https://www.paypal.com/donate/?business=hmjsarkar%40gmail.com&amp;cmd=_donations&amp;item_name=Support+Local+ClipCraft+by+WPM&amp;currency_code=USD">
+      <img src="https://img.shields.io/badge/Donate-PayPal-0070ba?style=for-the-badge&amp;logo=paypal&amp;logoColor=white" alt="Donate with PayPal" />
+    </a>
+  </p>
 </div>
 
 ---
@@ -196,6 +201,16 @@ You may only use this tool as provided. Modifying, reselling, redistributing, ho
 
 ---
 
+## 💖 Support This Project
+
+**Local ClipCraft by WPM** is 100% free with zero API subscriptions. If this tool helps you grow your channel or saves you editing hours, you can support the developer via PayPal:
+
+[![Donate with PayPal](https://img.shields.io/badge/Donate_via_PayPal-hmjsarkar%40gmail.com-0070ba?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?business=hmjsarkar%40gmail.com&cmd=_donations&item_name=Support+Local+ClipCraft+by+WPM&currency_code=USD)
+
+*(PayPal Email: `hmjsarkar@gmail.com`)*
+
+---
+
 ## 🙏 Credits & Developer
 
 <div align="center">
@@ -205,6 +220,7 @@ You may only use this tool as provided. Modifying, reselling, redistributing, ho
   <br />
   Developer: <strong>HMJSarkar</strong>
   <br /><br />
+  <a href="https://www.paypal.com/donate/?business=hmjsarkar%40gmail.com&amp;cmd=_donations&amp;item_name=Support+Local+ClipCraft+by+WPM&amp;currency_code=USD">💙 Donate (PayPal)</a> •
   <a href="https://worldpixelmap.in/">🌐 Website</a> •
   <a href="https://www.facebook.com/HMJSarkar">📘 Facebook</a> •
   <a href="https://www.instagram.com/hmjsarkar">📸 Instagram</a> •

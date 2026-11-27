@@ -6,7 +6,7 @@
   <title>Local ClipCraft by WPM — Offline-First Stream &amp; Video Clipper</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="shortcut icon" type="image/png" href="/favicon.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=3.1" />
+  <link rel="stylesheet" href="/static/styles.css?v=3.3" />
 </head>
 <body>
   <div class="app-shell">
@@ -27,6 +27,9 @@
         <span class="pill" id="offlineModelPill"><span class="dot"></span>Checking Offline Model...</span>
         <button type="button" class="pill pill-action" id="ytLoginPill" title="Log into YouTube in a popup window">
           <span class="dot"></span><span id="ytLoginPillText">Sign in to YouTube</span>
+        </button>
+        <button type="button" class="pill pill-donate" id="donatePill" title="Support Local ClipCraft by WPM via PayPal">
+          <span class="dot"></span><span>Donate</span>
         </button>
       </div>
     </header>
@@ -398,6 +401,7 @@
         </div>
       </div>
       <div class="credit-links">
+        <a href="https://www.paypal.com/donate/?business=hmjsarkar%40gmail.com&amp;cmd=_donations&amp;item_name=Support+Local+ClipCraft+by+WPM&amp;currency_code=USD" target="_blank" rel="noopener noreferrer" class="credit-donate" id="footerDonateLink">♥ Donate (PayPal)</a>
         <a href="https://worldpixelmap.in/" target="_blank" rel="noopener noreferrer">Website</a>
         <a href="https://www.facebook.com/HMJSarkar" target="_blank" rel="noopener noreferrer">Facebook</a>
         <a href="https://www.instagram.com/hmjsarkar" target="_blank" rel="noopener noreferrer">Instagram</a>
@@ -406,6 +410,46 @@
     </footer>
   </div>
 
-  <script src="/static/app.js?v=3.2"></script>
+  <!-- PayPal Support Modal -->
+  <div class="modal-backdrop hidden" id="donateModal" role="dialog" aria-modal="true" aria-labelledby="donateModalTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <span class="section-pill donate-pill-tag">Support The Creator</span>
+          <h3 id="donateModalTitle">Donate via PayPal</h3>
+        </div>
+        <button type="button" class="btn-ghost btn-sm" id="closeDonateModalBtn" aria-label="Close">✕</button>
+      </div>
+      <p class="modal-desc">
+        <strong>Local ClipCraft by WPM</strong> is free and offline-first. If this tool saves you editing hours, support future updates via PayPal!
+      </p>
+      <div class="donate-amounts" id="donateAmountGroup">
+        <button type="button" class="seg-btn" data-amt="3">$3</button>
+        <button type="button" class="seg-btn active" data-amt="5">$5</button>
+        <button type="button" class="seg-btn" data-amt="10">$10</button>
+        <button type="button" class="seg-btn" data-amt="25">$25</button>
+        <button type="button" class="seg-btn" data-amt="custom">Custom</button>
+      </div>
+      <div class="donate-custom-row hidden" id="donateCustomWrap">
+        <label for="donateCustomInput">Amount (USD)</label>
+        <input type="number" id="donateCustomInput" min="1" step="1" placeholder="Enter amount (leave empty to choose on PayPal)" />
+      </div>
+      <a
+        id="paypalDonateGoBtn"
+        class="btn-paypal"
+        href="https://www.paypal.com/donate/?business=hmjsarkar%40gmail.com&amp;cmd=_donations&amp;item_name=Support+Local+ClipCraft+by+WPM&amp;currency_code=USD&amp;amount=5"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Continue to PayPal ($5) →
+      </a>
+      <div class="donate-email-row">
+        <span>PayPal Email: <strong id="paypalEmailText">hmjsarkar@gmail.com</strong></span>
+        <button type="button" class="copy-btn" id="copyPaypalEmailBtn">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=3.3"></script>
 </body>
 </html>
