@@ -41,6 +41,11 @@ class CornerPosition(str, Enum):
     TOP_RIGHT = "top-right"
     BOTTOM_LEFT = "bottom-left"
     BOTTOM_RIGHT = "bottom-right"
+    TOP_CENTER = "top-center"
+    BOTTOM_CENTER = "bottom-center"
+    MID_LEFT = "mid-left"
+    MID_RIGHT = "mid-right"
+    CENTER = "center"
 
 
 class QualityPreset(str, Enum):

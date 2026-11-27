@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -146,17 +147,38 @@ def _cam_source_crop(src_w: int, src_h: int, corner: CornerPosition) -> str:
 
 
 def _tracked_cam_crop(track: FaceCropTrack) -> str:
-    """Build smooth face-tracked 9:16 FFmpeg crop filter string."""
-    expr_x = build_ffmpeg_lerp_expr(track.keyframes, axis="x")
-    expr_y = build_ffmpeg_lerp_expr(track.keyframes, axis="y")
+    """Build smooth face-tracked FFmpeg crop filter string with instant snap on hard scene cuts."""
+    expr_x = build_ffmpeg_lerp_expr(track.keyframes, axis="x", jump_thresh=max(32.0, track.cw * 0.65))
+    expr_y = build_ffmpeg_lerp_expr(track.keyframes, axis="y", jump_thresh=max(32.0, track.ch * 0.65))
     return f"crop={track.cw}:{track.ch}:'{expr_x}':'{expr_y}'"
 
 
-def _pip_dimensions(w_out: int, h_out: int) -> tuple[int, int]:
-    """Return tiny 9:16 portrait PiP (width, height) sized proportionally to the output clip."""
-    pip_w = _even(min(w_out, h_out) * 0.225, 90)
-    pip_w = max(90, (pip_w // 18) * 18 or pip_w)
-    pip_h = _even(pip_w * 16.0 / 9.0, 160)
+def _pip_dimensions(w_out: int, h_out: int, crop_ar: float | None = None) -> tuple[int, int]:
+    """
+    Return compact PiP (width, height) sized proportionally to the output clip.
+    When crop_ar is provided from the fitted human face crop, exact-match the aspect ratio
+    so the face fills 100% of the Cam Frame with zero blurry filler bars.
+    """
+    if crop_ar is None or crop_ar <= 0.0:
+        pip_w = _even(min(w_out, h_out) * 0.225, 90)
+        pip_w = max(90, (pip_w // 18) * 18 or pip_w)
+        pip_h = _even(pip_w * 16.0 / 9.0, 160)
+        return pip_w, pip_h
+
+    clamped_ar = max(0.5625, min(1.35, float(crop_ar)))
+    min_dim = min(w_out, h_out)
+    is_vertical = h_out > w_out
+    max_w = int(round(w_out * (0.29 if is_vertical else 0.22)))
+    max_h = int(round(h_out * (0.23 if is_vertical else 0.34)))
+
+    # Maintain consistent compact PiP visual area (~175x230 for 3:4 on 720x1280)
+    target_area = (min_dim * 0.25) ** 2 * 1.32
+    raw_w = math.sqrt(target_area * clamped_ar)
+    pip_w = _even(min(max_w, max(96.0, raw_w)), 64)
+    pip_h = _even(pip_w / clamped_ar, 64)
+    if pip_h > max_h:
+        pip_h = _even(max_h, 64)
+        pip_w = _even(pip_h * clamped_ar, 64)
     return pip_w, pip_h
 
 
@@ -173,7 +195,33 @@ def _cam_overlay_coords(w_out: int, h_out: int, corner: CornerPosition, aspect_r
         return f"W-w-{mx}:{my_top}"
     if corner == CornerPosition.BOTTOM_LEFT:
         return f"{mx}:H-h-{my_bot}"
-    return f"W-w-{mx}:H-h-{my_bot}"
+    if corner == CornerPosition.BOTTOM_RIGHT:
+        return f"W-w-{mx}:H-h-{my_bot}"
+    if corner == CornerPosition.TOP_CENTER:
+        return f"(W-w)/2:{my_top}"
+    if corner == CornerPosition.BOTTOM_CENTER:
+        return f"(W-w)/2:H-h-{my_bot}"
+    if corner == CornerPosition.MID_LEFT:
+        return f"{mx}:(H-h)/2"
+    if corner == CornerPosition.MID_RIGHT:
+        return f"W-w-{mx}:(H-h)/2"
+    return f"W-w-{mx}:{my_top}"
+
+
+def _corner_placement_from_region(region: CornerPosition) -> CornerPosition:
+    """Map any detected source face region to a safe non-obstructing output corner for auto-placement."""
+    if region in (
+        CornerPosition.TOP_LEFT,
+        CornerPosition.TOP_RIGHT,
+        CornerPosition.BOTTOM_LEFT,
+        CornerPosition.BOTTOM_RIGHT,
+    ):
+        return region
+    if region == CornerPosition.MID_LEFT:
+        return CornerPosition.TOP_LEFT
+    if region == CornerPosition.BOTTOM_CENTER:
+        return CornerPosition.BOTTOM_RIGHT
+    return CornerPosition.TOP_RIGHT
 
 
 def render_clip(
@@ -216,9 +264,10 @@ def render_clip(
     cam_crop = _tracked_cam_crop(corner_track) if show_pip and corner_track else ""
 
     if show_pip and corner_track:
-        pip_w, pip_h = _pip_dimensions(w_out, h_out)
+        crop_ar = corner_track.cw / max(1, corner_track.ch)
+        pip_w, pip_h = _pip_dimensions(w_out, h_out, crop_ar=crop_ar)
         target_corner = (
-            corner_track.detected_corner
+            _corner_placement_from_region(corner_track.detected_corner)
             if streamer_cam_target == CornerPosition.AUTO
             else streamer_cam_target
         )
@@ -226,20 +275,18 @@ def render_clip(
             target_corner = CornerPosition.TOP_RIGHT
         overlay_xy = _cam_overlay_coords(w_out, h_out, target_corner, aspect_ratio)
 
-        # If cropped webcam box is wider than 9:16 (e.g. 180x204), fit cleanly inside 9:16 PiP with blurred fill
-        crop_ar = corner_track.cw / max(1, corner_track.ch)
-        if abs(crop_ar - (9.0 / 16.0)) <= 0.03:
+        # Fill the Cam Frame cleanly edge-to-edge without distortion or blurred dead bars
+        pip_ar = pip_w / max(1, pip_h)
+        if abs(crop_ar - pip_ar) <= 0.035:
             pip_chain = (
                 f"{cam_crop},scale={pip_w}:{pip_h}:flags=lanczos,"
-                f"pad=iw+4:ih+4:2:2:color=white@0.92,setsar=1"
+                f"pad=iw+4:ih+4:2:2:color=white@0.92,pad=iw+4:ih+4:2:2:color=black@0.45,setsar=1"
             )
         else:
             pip_chain = (
-                f"{cam_crop},split=2[pipbg][pipfg];"
-                f"[pipbg]scale={pip_w}:{pip_h}:force_original_aspect_ratio=increase,"
-                f"crop={pip_w}:{pip_h},boxblur=22:6,eq=brightness=-0.12[pb];"
-                f"[pipfg]scale={pip_w}:{pip_h}:force_original_aspect_ratio=decrease:flags=lanczos[pf];"
-                f"[pb][pf]overlay=(W-w)/2:(H-h)/2,pad=iw+4:ih+4:2:2:color=white@0.92,setsar=1"
+                f"{cam_crop},scale={pip_w}:{pip_h}:force_original_aspect_ratio=increase:flags=lanczos,"
+                f"crop={pip_w}:{pip_h}:(iw-ow)/2:(ih-oh)/2,"
+                f"pad=iw+4:ih+4:2:2:color=white@0.92,pad=iw+4:ih+4:2:2:color=black@0.45,setsar=1"
             )
 
         enable_opt = ""

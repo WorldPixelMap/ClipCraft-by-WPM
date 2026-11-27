@@ -133,24 +133,29 @@
               </div>
             </div>
 
-            <!-- Streamer Corner PiP -->
+            <!-- Streamer Cam Frame PiP -->
             <div class="control-box">
-              <label class="control-label">Streamer Corner Cam (PiP)</label>
+              <label class="control-label">Streamer Cam Frame (PiP)</label>
               <div class="pip-row">
                 <div class="pip-controls">
                   <div class="pip-mini-field">
-                    <span class="mini-label">Source Cam Corner (Face-Tracked)</span>
+                    <span class="mini-label">Detect Real Human Face From</span>
                     <select id="camSourceSelect">
-                      <option value="off" selected>Off (No Facecam PiP)</option>
-                      <option value="auto">Auto-Detect Face Corner (Recommended)</option>
-                      <option value="bottom-left">Bottom-Left of Stream</option>
-                      <option value="bottom-right">Bottom-Right of Stream</option>
-                      <option value="top-left">Top-Left of Stream</option>
-                      <option value="top-right">Top-Right of Stream</option>
+                      <option value="off" selected>Off (No Cam Frame)</option>
+                      <option value="auto">Auto-Detect Real Face (Anywhere — Recommended)</option>
+                      <option value="top-left">Top-Left of Video</option>
+                      <option value="top-right">Top-Right of Video</option>
+                      <option value="bottom-left">Bottom-Left of Video</option>
+                      <option value="bottom-right">Bottom-Right of Video</option>
+                      <option value="top-center">Top-Center of Video</option>
+                      <option value="bottom-center">Bottom-Center of Video</option>
+                      <option value="mid-left">Mid-Left Edge</option>
+                      <option value="mid-right">Mid-Right Edge</option>
+                      <option value="center">Center of Video</option>
                     </select>
                   </div>
                   <div class="pip-mini-field" id="camTargetWrap">
-                    <span class="mini-label">Keep Tiny Frame In</span>
+                    <span class="mini-label">Place Cam Frame In</span>
                     <div class="corner-grid" id="camTargetGroup">
                       <button type="button" class="corner-btn" data-corner="top-left">Top-Left</button>
                       <button type="button" class="corner-btn active" data-corner="top-right">Top-Right</button>
@@ -158,7 +163,7 @@
                       <button type="button" class="corner-btn" data-corner="bottom-right">Bot-Right</button>
                     </div>
                   </div>
-                  <div class="pip-status-line" id="pipStatusLine">Facecam PiP Off</div>
+                  <div class="pip-status-line" id="pipStatusLine">Cam Frame Off</div>
                 </div>
                 <div class="pip-diagram" id="pipDiagram" title="Preview of streamer tiny frame position">
                   <div class="pip-box top-right hidden" id="pipBox">CAM</div>
@@ -242,6 +247,36 @@
             <span>Pick Best Moments &amp; Generate Clips</span>
           </button>
         </form>
+      </section>
+
+      <!-- Live Progress Panel -->
+      <section class="progress-card hidden" id="progressCard">
+        <div class="progress-top">
+          <div>
+            <span class="stage-badge" id="stageBadge">Queued</span>
+            <h2 id="progressTitle">Preparing video...</h2>
+          </div>
+          <span class="progress-pct" id="progressPct">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+        <p class="progress-msg" id="progressMsg">Initializing local clipping pipeline...</p>
+      </section>
+
+      <!-- Results Gallery -->
+      <section class="results-section hidden" id="resultsSection">
+        <div class="results-header">
+          <div>
+            <h2>Generated Clips &amp; Upload Kit</h2>
+            <p class="ai-note" id="aiNote"></p>
+          </div>
+          <div class="results-actions">
+            <a class="btn-secondary" id="downloadAllBtn" href="#" download>Download All (.ZIP)</a>
+            <button type="button" class="btn-secondary" id="openFolderBtn">Open Output Folder</button>
+          </div>
+        </div>
+        <div class="clips-grid" id="clipsGrid"></div>
       </section>
 
       <section class="hero-card reel-card" id="reelCaptionSection">
@@ -342,36 +377,6 @@
         </form>
       </section>
 
-      <!-- Live Progress Panel -->
-      <section class="progress-card hidden" id="progressCard">
-        <div class="progress-top">
-          <div>
-            <span class="stage-badge" id="stageBadge">Queued</span>
-            <h2 id="progressTitle">Preparing video...</h2>
-          </div>
-          <span class="progress-pct" id="progressPct">0%</span>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" id="progressFill" style="width: 0%"></div>
-        </div>
-        <p class="progress-msg" id="progressMsg">Initializing local clipping pipeline...</p>
-      </section>
-
-      <!-- Results Gallery -->
-      <section class="results-section hidden" id="resultsSection">
-        <div class="results-header">
-          <div>
-            <h2>Generated Clips &amp; Upload Kit</h2>
-            <p class="ai-note" id="aiNote"></p>
-          </div>
-          <div class="results-actions">
-            <a class="btn-secondary" id="downloadAllBtn" href="#" download>Download All (.ZIP)</a>
-            <button type="button" class="btn-secondary" id="openFolderBtn">Open Output Folder</button>
-          </div>
-        </div>
-        <div class="clips-grid" id="clipsGrid"></div>
-      </section>
-
       <!-- Recent Saved Jobs -->
       <section class="history-section hidden" id="historySection">
         <div class="history-header">
@@ -401,6 +406,6 @@
     </footer>
   </div>
 
-  <script src="/static/app.js?v=3.1"></script>
+  <script src="/static/app.js?v=3.2"></script>
 </body>
 </html>

@@ -138,11 +138,11 @@ function updatePipDiagram() {
   if (statusEl) {
     statusEl.classList.toggle("active", enabled);
     if (!enabled) {
-      statusEl.textContent = "Facecam PiP Off";
+      statusEl.textContent = "Cam Frame Off";
     } else if (state.camSource === "auto") {
-      statusEl.textContent = `Auto Face-Track → Place ${state.camTarget}`;
+      statusEl.textContent = `Auto Real-Face Fit (Anywhere) → Place ${state.camTarget}`;
     } else {
-      statusEl.textContent = `Face-Track ${state.camSource} → Place ${state.camTarget}`;
+      statusEl.textContent = `Fit Real Face (${state.camSource}) → Place ${state.camTarget}`;
     }
   }
 }
@@ -196,6 +196,11 @@ async function loadHistory() {
       `;
       btn.addEventListener("click", () => {
         state.currentJobId = j.job_id;
+        anchorJobOutputAfter(
+          j.platform === "Pre-Edited Reel"
+            ? $("reelCaptionSection")
+            : $("clipForm").closest(".hero-card")
+        );
         renderClips(j);
         $("resultsSection").scrollIntoView({ behavior: "smooth" });
       });
@@ -369,6 +374,14 @@ function renderClips(job) {
   $("resultsSection").classList.remove("hidden");
 }
 
+function anchorJobOutputAfter(sectionEl) {
+  const prog = $("progressCard");
+  const res = $("resultsSection");
+  if (!sectionEl || !prog || !res) return;
+  sectionEl.insertAdjacentElement("afterend", prog);
+  prog.insertAdjacentElement("afterend", res);
+}
+
 function updateProgressUI(job) {
   $("progressCard").classList.remove("hidden");
   $("stageBadge").textContent = job.stage;
@@ -431,10 +444,9 @@ function startListening(jobId) {
 document.addEventListener("DOMContentLoaded", () => {
   checkHealth();
   loadHistory();
-  if ($("camSourceSelect").value && $("camSourceSelect").value !== "off") {
-    if ($("camSourceSelect").value !== "auto") {
-      state.camTarget = $("camSourceSelect").value;
-    }
+  const outputCorners = new Set(["top-left", "top-right", "bottom-left", "bottom-right"]);
+  if ($("camSourceSelect").value && outputCorners.has($("camSourceSelect").value)) {
+    state.camTarget = $("camSourceSelect").value;
     document.querySelectorAll("#camTargetGroup .corner-btn").forEach((b) => {
       b.classList.toggle("active", b.dataset.corner === state.camTarget);
     });
@@ -489,7 +501,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const onCamSourceChange = (e) => {
     const val = e.target.value || "off";
     state.camSource = val;
-    if (val !== "off" && val !== "auto") {
+    if (outputCorners.has(val)) {
       state.camTarget = val;
       document.querySelectorAll("#camTargetGroup .corner-btn").forEach((b) => {
         b.classList.toggle("active", b.dataset.corner === val);
@@ -616,6 +628,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    anchorJobOutputAfter($("clipForm").closest(".hero-card"));
     $("generateBtn").disabled = true;
     $("resultsSection").classList.add("hidden");
     $("clipsGrid").innerHTML = "";
@@ -749,6 +762,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    anchorJobOutputAfter($("reelCaptionSection"));
     $("reelSubmitBtn").disabled = true;
     $("generateBtn").disabled = true;
     $("resultsSection").classList.add("hidden");

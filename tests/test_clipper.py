@@ -347,6 +347,14 @@ class TestSyntheticClippingPipeline(unittest.TestCase):
         pw, ph = _pip_dimensions(720, 1280)
         self.assertAlmostEqual(pw / ph, 9.0 / 16.0, places=2)
         self.assertLessEqual(pw, 170)
+
+        # Adaptive face-fitted Cam Frame matches crop_ar without blurred bars
+        apw, aph = _pip_dimensions(720, 1280, crop_ar=0.82)
+        self.assertAlmostEqual(apw / aph, 0.82, delta=0.04)
+        self.assertLessEqual(apw, 210)
+        sqw, sqh = _pip_dimensions(720, 1280, crop_ar=1.0)
+        self.assertAlmostEqual(sqw / sqh, 1.0, delta=0.04)
+
         crop = _cam_source_crop(1280, 720, CornerPosition.TOP_LEFT)
         parts = [int(x) for x in crop.replace("crop=", "").split(":")]
         cw, ch = parts[0], parts[1]
@@ -364,10 +372,15 @@ class TestSyntheticClippingPipeline(unittest.TestCase):
             main_face = (950.0, 180.0, 110.0, 130.0, 0.95)
             frame_faces.append((t, [corner_face, main_face]))
 
-        corner_track = track_corner_streamer_face(frame_faces, 1280, 720, CornerPosition.AUTO)
+        # When requested explicitly in TOP_LEFT, tracks TOP_LEFT cleanly
+        corner_track = track_corner_streamer_face(frame_faces, 1280, 720, CornerPosition.TOP_LEFT)
         self.assertIsNotNone(corner_track)
         self.assertEqual(corner_track.detected_corner, CornerPosition.TOP_LEFT)
-        self.assertAlmostEqual(corner_track.cw / corner_track.ch, 9.0 / 16.0, places=2)
+        crop_ar = corner_track.cw / corner_track.ch
+        self.assertGreaterEqual(crop_ar, 0.56)
+        self.assertLessEqual(crop_ar, 0.90)
+        pw, ph = _pip_dimensions(720, 1280, crop_ar=crop_ar)
+        self.assertAlmostEqual(pw / ph, crop_ar, delta=0.04)
         # Crop center X must track the streamer face near x ~ 200 rather than blind x=93 edge
         mid_kf = corner_track.keyframes[len(corner_track.keyframes) // 2]
         self.assertGreater(mid_kf.x + corner_track.cw / 2.0, 175.0)
@@ -380,7 +393,19 @@ class TestSyntheticClippingPipeline(unittest.TestCase):
         expr_x = build_ffmpeg_lerp_expr(corner_track.keyframes, axis="x")
         self.assertIn("if(lt(t,", expr_x)
 
-        # Cutscene gap > 1.1s splits active intervals so empty cutscene PiP stays hidden
+        # Jump-cut snapping must step instead of gliding smoothly across huge jumps
+        snap_expr = build_ffmpeg_lerp_expr(
+            [
+                corner_track.keyframes[0],
+                corner_track.keyframes[-1].__class__(t=2.0, x=980.0, y=500.0),
+            ],
+            axis="x",
+            jump_thresh=80.0,
+        )
+        self.assertIn("if(lt(t,1.00)", snap_expr)
+        self.assertNotIn("*(t-", snap_expr)
+
+        # Cutscene gap > 1.2s splits active intervals so empty cutscene PiP stays hidden
         intervals = _build_active_intervals([0.0, 0.5, 1.0, 5.0, 5.5, 6.0], clip_dur=8.0)
         self.assertEqual(len(intervals), 2)
 
@@ -393,13 +418,53 @@ class TestSyntheticClippingPipeline(unittest.TestCase):
                 "-v", "error",
                 "-y",
                 "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=24:duration=4",
-                "-vf", f"crop={corner_track.cw}:{corner_track.ch}:'{expr_x}':20,scale=162:288",
+                "-vf", f"crop={corner_track.cw}:{corner_track.ch}:'{expr_x}':20,scale={pw}:{ph}",
                 "-c:v", "libx264", "-preset", "ultrafast",
                 str(out),
             ]
             subprocess.run(cmd, check=True)
             info = probe_video(out)
-            self.assertEqual((info.width, info.height), (162, 288))
+            self.assertEqual((info.width, info.height), (pw, ph))
+
+    def test_face_tracker_anywhere_positions_and_anti_npc(self) -> None:
+        # 1. Bottom-Center streamer + transient high-conf NPC walking across middle
+        frame_faces = []
+        for idx in range(10):
+            t = idx * 0.4
+            bot_center_streamer = (605.0, 560.0, 68.0, 82.0, 0.89)
+            faces = [bot_center_streamer]
+            if idx in (2, 3, 4):
+                # Roaming in-game NPC near center crosshair
+                faces.append((540.0 + idx * 38.0, 260.0 + idx * 14.0, 72.0, 86.0, 0.94))
+            frame_faces.append((t, faces))
+
+        tr = track_corner_streamer_face(frame_faces, 1280, 720, CornerPosition.AUTO)
+        self.assertIsNotNone(tr)
+        self.assertEqual(tr.detected_corner, CornerPosition.BOTTOM_CENTER)
+        mid = tr.keyframes[len(tr.keyframes) // 2]
+        self.assertAlmostEqual(mid.x + tr.cw / 2.0, 639.0, delta=25.0)
+        self.assertAlmostEqual(mid.y + tr.ch / 2.0, 601.0, delta=35.0)
+
+        # 2. Mid-Left streamer position
+        mid_left_frames = [(idx * 0.5, [(72.0, 315.0 + idx * 2.0, 66.0, 80.0, 0.91)]) for idx in range(6)]
+        tr_ml = track_corner_streamer_face(mid_left_frames, 1280, 720, CornerPosition.AUTO)
+        self.assertIsNotNone(tr_ml)
+        self.assertEqual(tr_ml.detected_corner, CornerPosition.MID_LEFT)
+
+        # 3. Top-Center streamer position
+        top_ctr_frames = [(idx * 0.5, [(595.0, 48.0, 74.0, 88.0, 0.92)]) for idx in range(6)]
+        tr_tc = track_corner_streamer_face(top_ctr_frames, 1280, 720, CornerPosition.AUTO)
+        self.assertIsNotNone(tr_tc)
+        self.assertEqual(tr_tc.detected_corner, CornerPosition.TOP_CENTER)
+
+        # 4. Dead-Center streamer position (IRL / full reaction)
+        ctr_frames = [(idx * 0.5, [(575.0, 275.0, 125.0, 155.0, 0.94)]) for idx in range(6)]
+        tr_c = track_corner_streamer_face(ctr_frames, 1280, 720, CornerPosition.AUTO)
+        self.assertIsNotNone(tr_c)
+        self.assertEqual(tr_c.detected_corner, CornerPosition.CENTER)
+        c_mid = tr_c.keyframes[len(tr_c.keyframes) // 2]
+        self.assertAlmostEqual(c_mid.x + tr_c.cw / 2.0, 637.5, delta=25.0)
+        self.assertAlmostEqual(c_mid.y + tr_c.ch * 0.45, 352.5, delta=25.0)
 
     def test_custom_script_and_srt_zero_ai_pacing(self) -> None:
         srt_text = (
