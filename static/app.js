@@ -17,15 +17,18 @@ function buildPayPalDonateUrl(amount) {
   }
   const params = new URLSearchParams();
   if (PAYPAL_CONFIG.hostedButtonId) {
+    params.set("cmd", "_s-xclick");
     params.set("hosted_button_id", PAYPAL_CONFIG.hostedButtonId);
-  } else {
-    params.set("business", PAYPAL_CONFIG.businessEmail);
-    params.set("cmd", "_donations");
-    params.set("item_name", PAYPAL_CONFIG.itemName);
-    params.set("currency_code", PAYPAL_CONFIG.currencyCode);
-    if (hasAmt) params.set("amount", String(numericAmt));
+    return `https://www.paypal.com/cgi-bin/webscr?${params.toString()}`;
   }
-  return `https://www.paypal.com/donate/?${params.toString()}`;
+  // Use standard _xclick checkout (avoids "Donations aren't supported in this organisation's country" in IN/restricted regions)
+  params.set("cmd", "_xclick");
+  params.set("business", PAYPAL_CONFIG.businessEmail);
+  params.set("item_name", PAYPAL_CONFIG.itemName);
+  params.set("currency_code", PAYPAL_CONFIG.currencyCode);
+  params.set("no_shipping", "1");
+  params.set("amount", hasAmt ? numericAmt.toFixed(2) : "5.00");
+  return `https://www.paypal.com/cgi-bin/webscr?${params.toString()}`;
 }
 
 const state = {
@@ -785,17 +788,17 @@ document.addEventListener("DOMContentLoaded", () => {
   function syncDonateCheckoutLink() {
     const rawAmt =
       state.donateAmount === "custom" ? $("donateCustomInput").value.trim() : state.donateAmount;
-    const valid = Number(rawAmt) > 0 ? Number(rawAmt) : null;
+    const valid = Number(rawAmt) > 0 ? Number(rawAmt) : 5;
     const url = buildPayPalDonateUrl(valid);
     const goBtn = $("paypalDonateGoBtn");
     if (goBtn) {
       goBtn.href = url;
-      goBtn.textContent = valid ? `Continue to PayPal ($${valid}) →` : "Continue to PayPal →";
+      goBtn.textContent = `Continue to PayPal ($${valid}) →`;
     }
   }
 
   if ($("footerDonateLink")) {
-    $("footerDonateLink").href = buildPayPalDonateUrl(null);
+    $("footerDonateLink").href = buildPayPalDonateUrl(5);
   }
   if ($("paypalEmailText")) {
     $("paypalEmailText").textContent = PAYPAL_CONFIG.businessEmail;
