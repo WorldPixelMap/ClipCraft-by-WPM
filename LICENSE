@@ -1,0 +1,76 @@
+PROPRIETARY SOFTWARE LICENSE — USE ONLY (ALL RIGHTS RESERVED)
+
+Software: Local ClipCraft by WPM
+Copyright (c) 2026 World Pixel Map (https://worldpixelmap.in/)
+Developer: HMJSarkar (https://github.com/WorldPixelMap)
+
+All rights reserved.
+
+This Software (including, without limitation, all source code, scripts, user
+interface files, documentation, icons, graphics, configurations, and associated
+materials) is the exclusive intellectual property of World Pixel Map ("Owner").
+
+1. GRANT OF PERMITTED USE ONLY
+Subject to full compliance with this License, the Owner grants you a limited,
+non-exclusive, non-transferable, non-sublicensable, revocable license solely
+to download, install, and run this Software strictly for your own direct use as
+an end-user tool. No ownership rights or title in the Software are transferred
+to you.
+
+2. STRICT PROHIBITIONS (ALL OTHER ACTIONS PROHIBITED)
+Except for strictly using this Software as permitted in Section 1, any other
+act or use without the explicit prior written permission of the Owner is
+STRICTLY PROHIBITED. Without limiting the generality of the foregoing, you may
+NOT, directly or indirectly:
+
+  (a) Modify, edit, adapt, patch, translate, customize, or create derivative
+      works based upon the Software or any portion thereof;
+  (b) Sell, resell, rent, lease, lend, sublicense, monetize, bundle, or
+      distribute the Software (in whole or in part) for any commercial or
+      non-commercial purpose;
+  (c) Offer, deploy, or host the Software as a service (SaaS), web app, API,
+      or hosted tool for third parties;
+  (d) Copy, redistribute, republish, mirror, upload, or transfer the Software
+      or modified versions of it to any third party or public/private
+      repository without prior written authorization from the Owner;
+  (e) Remove, hide, alter, or obscure any copyright notices, branding
+      ("Local ClipCraft by WPM", "World Pixel Map"), developer attribution
+      ("HMJSarkar"), favicons, or license notices; or
+  (f) Reverse engineer, decompile, extract, or repurpose components of this
+      Software into any competing or separate product.
+
+3. THIRD-PARTY LIBRARIES & USER CONTENT RESPONSIBILITY
+This Software utilizes independent third-party open-source tools and libraries
+(such as Python packages listed in requirements.txt, FFmpeg, yt-dlp,
+faster-whisper, OpenCV, and YuNet), each of which remains governed by its own
+respective license. You are solely responsible for ensuring that your use of
+this Software complies with all applicable laws, copyright rules, and platform
+terms of service.
+
+4. TERMINATION
+This License is effective until terminated. Your rights under this License
+terminate automatically and immediately without notice if you fail to comply
+with any term or restriction herein. Upon termination, you must cease all use
+of the Software and destroy all copies in your possession or control.
+
+5. DISCLAIMER OF WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+6. LIMITATION OF LIABILITY
+IN NO EVENT SHALL WORLD PIXEL MAP, HMJSARKAR, OR ANY AFFILIATES BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, WITHOUT LIMITATION, LOSS OF DATA, BUSINESS INTERRUPTION, OR
+PLATFORM ACCOUNT ACTIONS) ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+INABILITY TO USE THIS SOFTWARE.
+
+7. PERMISSIONS & CONTACT
+To request written permission for modification, redistribution, commercial
+licensing, or any use outside Section 1, contact the Owner:
+  - Organization: World Pixel Map
+  - Website:      https://worldpixelmap.in/
+  - Developer:    HMJSarkar
+  - GitHub:       https://github.com/WorldPixelMap
+  - Facebook:     https://www.facebook.com/HMJSarkar
+  - Instagram:    https://www.instagram.com/hmjsarkar

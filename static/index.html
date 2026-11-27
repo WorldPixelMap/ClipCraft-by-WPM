@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local ClipCraft by WPM — Offline-First Stream &amp; Video Clipper</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="shortcut icon" type="image/png" href="/favicon.png" />
+  <link rel="stylesheet" href="/static/styles.css?v=3.1" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="6 3 20 12 6 21 6 3"></polygon>
+          </svg>
+        </div>
+        <div>
+          <span class="brand-name">Local ClipCraft by WPM</span>
+          <span class="brand-tag">YouTube • Twitch • Kick • Facebook • Offline-First</span>
+        </div>
+      </div>
+      <div class="status-pills" id="systemPills">
+        <span class="pill pill-good"><span class="dot"></span>No-AI Moment Picker</span>
+        <span class="pill" id="offlineModelPill"><span class="dot"></span>Checking Offline Model...</span>
+        <button type="button" class="pill pill-action" id="ytLoginPill" title="Log into YouTube in a popup window">
+          <span class="dot"></span><span id="ytLoginPillText">Sign in to YouTube</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="hero-card">
+        <div class="hero-header">
+          <h1>Turn YouTube, Twitch &amp; stream links into ready-to-post clips</h1>
+          <p>Zero cloud AI. Paste a video or VOD link, choose your clip count, caption language (English / Hindi / Hinglish), and optional streamer corner frame — get clips with suggested titles, captions &amp; hashtags.</p>
+        </div>
+
+        <form id="clipForm" class="clip-form">
+          <!-- Step 1: Multi-Platform URL -->
+          <div class="url-row">
+            <div class="input-wrap">
+              <svg class="input-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+              </svg>
+              <input
+                type="url"
+                id="urlInput"
+                placeholder="Paste YouTube, Twitch, Kick, Facebook, X, or video link..."
+                autocomplete="off"
+              />
+              <button type="button" class="btn-ghost btn-sm" id="pasteBtn" title="Paste from clipboard">Paste</button>
+            </div>
+            <button type="button" class="btn-secondary" id="inspectBtn">Preview</button>
+            <button type="button" class="btn-secondary" id="pickLocalBtn" title="Clip a video file already on your PC">Local Video</button>
+            <input type="file" id="localFileInput" accept=".mp4,.mkv,.webm,.mov,.m4v,.avi" class="hidden" />
+          </div>
+
+          <div class="local-file-bar hidden" id="localFileBar">
+            <span>Selected local file: <strong id="localFileName"></strong></span>
+            <button type="button" class="btn-ghost btn-sm" id="clearLocalBtn">Clear</button>
+          </div>
+
+          <div class="yt-auth-bar hidden" id="ytAuthBar">
+            <span id="ytAuthBarMsg">Sign into YouTube in the popup window — it will close &amp; save automatically once you're signed in.</span>
+            <div class="yt-auth-actions">
+              <button type="button" class="btn-secondary btn-xs" id="ytAuthSaveBtn">Save Now</button>
+              <button type="button" class="btn-ghost btn-xs" id="ytAuthCancelBtn">Cancel</button>
+            </div>
+          </div>
+
+          <!-- Optional Video Preview Banner -->
+          <div class="video-preview hidden" id="videoPreview">
+            <img id="previewThumb" src="" alt="Video thumbnail" />
+            <div class="preview-meta">
+              <div class="preview-title" id="previewTitle"></div>
+              <div class="preview-sub" id="previewSub"></div>
+              <div class="preview-badges" id="previewBadges"></div>
+            </div>
+          </div>
+
+          <!-- Step 2: Core Minimal Controls -->
+          <div class="controls-grid">
+            <!-- Number of Clips -->
+            <div class="control-box">
+              <label class="control-label">Number of Clips</label>
+              <div class="stepper">
+                <button type="button" class="step-btn" id="decClips" aria-label="Decrease clips">−</button>
+                <span class="step-val" id="clipCountDisplay">3</span>
+                <button type="button" class="step-btn" id="incClips" aria-label="Increase clips">+</button>
+                <div class="quick-counts" role="group" aria-label="Quick clip count">
+                  <button type="button" class="q-btn" data-count="1">1</button>
+                  <button type="button" class="q-btn active" data-count="3">3</button>
+                  <button type="button" class="q-btn" data-count="5">5</button>
+                </div>
+              </div>
+              <input type="hidden" id="numClipsInput" value="3" />
+
+              <label class="control-label sub-label">Clip Format</label>
+              <div class="seg-group" id="aspectGroup">
+                <button type="button" class="seg-btn active" data-aspect="9:16">9:16 Shorts</button>
+                <button type="button" class="seg-btn" data-aspect="9:16-fit">9:16 Blur</button>
+                <button type="button" class="seg-btn" data-aspect="16:9">16:9 Wide</button>
+              </div>
+            </div>
+
+            <!-- Highlighted Captions + Language -->
+            <div class="control-box">
+              <label class="control-label">Highlighted Captions</label>
+              <div class="caption-bar">
+                <label class="switch">
+                  <input type="checkbox" id="captionsToggle" checked />
+                  <span class="slider"></span>
+                </label>
+                <span class="switch-text" id="captionsStatusText">Word Highlight ON</span>
+                <div class="color-dots" id="colorDots" title="Highlight word color">
+                  <button type="button" class="c-dot active" data-color="yellow" style="--c:#ffe600" aria-label="Yellow"></button>
+                  <button type="button" class="c-dot" data-color="cyan" style="--c:#00f0ff" aria-label="Cyan"></button>
+                  <button type="button" class="c-dot" data-color="lime" style="--c:#55ff32" aria-label="Lime"></button>
+                  <button type="button" class="c-dot" data-color="coral" style="--c:#ff4d6d" aria-label="Coral"></button>
+                </div>
+              </div>
+
+              <label class="control-label sub-label">Caption Language</label>
+              <div class="seg-group" id="langGroup">
+                <button type="button" class="seg-btn active" data-lang="auto">Auto</button>
+                <button type="button" class="seg-btn" data-lang="en">English</button>
+                <button type="button" class="seg-btn" data-lang="hi">Hindi (हिंदी)</button>
+                <button type="button" class="seg-btn" data-lang="hinglish">Hinglish</button>
+              </div>
+            </div>
+
+            <!-- Streamer Corner PiP -->
+            <div class="control-box">
+              <label class="control-label">Streamer Corner Cam (PiP)</label>
+              <div class="pip-row">
+                <div class="pip-controls">
+                  <div class="pip-mini-field">
+                    <span class="mini-label">Source Cam Corner (Face-Tracked)</span>
+                    <select id="camSourceSelect">
+                      <option value="off" selected>Off (No Facecam PiP)</option>
+                      <option value="auto">Auto-Detect Face Corner (Recommended)</option>
+                      <option value="bottom-left">Bottom-Left of Stream</option>
+                      <option value="bottom-right">Bottom-Right of Stream</option>
+                      <option value="top-left">Top-Left of Stream</option>
+                      <option value="top-right">Top-Right of Stream</option>
+                    </select>
+                  </div>
+                  <div class="pip-mini-field" id="camTargetWrap">
+                    <span class="mini-label">Keep Tiny Frame In</span>
+                    <div class="corner-grid" id="camTargetGroup">
+                      <button type="button" class="corner-btn" data-corner="top-left">Top-Left</button>
+                      <button type="button" class="corner-btn active" data-corner="top-right">Top-Right</button>
+                      <button type="button" class="corner-btn" data-corner="bottom-left">Bot-Left</button>
+                      <button type="button" class="corner-btn" data-corner="bottom-right">Bot-Right</button>
+                    </div>
+                  </div>
+                  <div class="pip-status-line" id="pipStatusLine">Facecam PiP Off</div>
+                </div>
+                <div class="pip-diagram" id="pipDiagram" title="Preview of streamer tiny frame position">
+                  <div class="pip-box top-right hidden" id="pipBox">CAM</div>
+                  <span class="pip-cap-bar">CAPTIONS</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Collapsible Studio, Auth & Minimal PC Options -->
+          <details class="advanced-drawer" id="advancedDrawer">
+            <summary>Engine, YouTube Cookies, Audio Boost &amp; Watermark Options</summary>
+            <div class="advanced-grid">
+              <div class="adv-field">
+                <label for="captionModeSelect">Caption Engine</label>
+                <select id="captionModeSelect">
+                  <option value="auto" selected>Auto (Zero-AI captions first, Offline Tiny fallback)</option>
+                  <option value="no_ai">Strict Zero-AI Only (Platform + Audio Pacing)</option>
+                  <option value="offline">Inbuilt Offline Whisper-Tiny (Best Word Sync)</option>
+                </select>
+              </div>
+              <div class="adv-field">
+                <label for="clipDurSelect">Target Clip Length</label>
+                <select id="clipDurSelect">
+                  <option value="20">Short (~20s)</option>
+                  <option value="35" selected>Standard (~35s)</option>
+                  <option value="55">Extended (~55s)</option>
+                </select>
+              </div>
+              <div class="adv-field">
+                <label for="qualitySelect">Render Resolution</label>
+                <select id="qualitySelect">
+                  <option value="720p" selected>720p (Fast / Minimal PC)</option>
+                  <option value="1080p">1080p HD</option>
+                </select>
+              </div>
+              <div class="adv-field">
+                <label for="watermarkInput">Channel Watermark (Optional)</label>
+                <input type="text" id="watermarkInput" maxlength="32" placeholder="@YourHandle" />
+              </div>
+              <div class="adv-field">
+                <label for="cookiesBrowserSelect">Browser Cookies (YouTube Sign-In)</label>
+                <select id="cookiesBrowserSelect">
+                  <option value="" selected>None (Public / cookies.txt if loaded)</option>
+                  <option value="firefox">Firefox (recommended — works while open)</option>
+                  <option value="edge">Edge (close all Edge windows first)</option>
+                  <option value="chrome">Chrome (close all Chrome windows first)</option>
+                  <option value="brave">Brave (close all Brave windows first)</option>
+                </select>
+              </div>
+              <div class="adv-field">
+                <label>YouTube Account / Cookies <span id="cookiesBadge" class="mini-status">(Not Signed In)</span></label>
+                <div class="cookies-btn-row">
+                  <button type="button" class="btn-secondary btn-xs" id="ytLoginOptBtn">Sign in to YouTube</button>
+                  <button type="button" class="btn-ghost btn-xs" id="uploadCookiesBtn">Load cookies.txt</button>
+                  <button type="button" class="btn-ghost btn-xs" id="pasteCookiesToggleBtn">Paste</button>
+                  <button type="button" class="btn-ghost btn-xs hidden" id="clearCookiesBtn">Sign Out</button>
+                  <input type="file" id="cookiesFileInput" accept=".txt" class="hidden" />
+                </div>
+                <div class="cookies-paste-box hidden" id="cookiesPasteBox">
+                  <textarea id="cookiesTextInput" rows="3" placeholder="Paste Netscape cookies.txt content here..."></textarea>
+                  <button type="button" class="btn-secondary btn-xs" id="saveCookiesTextBtn">Save Cookies</button>
+                </div>
+                <div class="cookies-help">Click <strong>Sign in to YouTube</strong> to log in via a popup window (saves session locally for <code>yt-dlp</code>).</div>
+              </div>
+              <div class="adv-field adv-check-wrap">
+                <label class="check-label">
+                  <input type="checkbox" id="audioBoostToggle" checked />
+                  <span>Voice Loudness Boost (Fast 1-pass punchy audio)</span>
+                </label>
+              </div>
+            </div>
+          </details>
+
+          <div class="error-banner hidden" id="errorBanner"></div>
+
+          <button type="submit" class="btn-primary" id="generateBtn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+            <span>Pick Best Moments &amp; Generate Clips</span>
+          </button>
+        </form>
+      </section>
+
+      <section class="hero-card reel-card" id="reelCaptionSection">
+        <div class="hero-header reel-header">
+          <div>
+            <span class="section-pill">No Slicing • Keep Full Edit</span>
+            <h2>Caption Your Pre-Edited Reel</h2>
+            <p>Already cut &amp; edited your reel? Upload it below to add word-by-word highlighted captions (auto-synced via inbuilt offline Whisper-tiny, or paste your own script / .SRT for 100% Zero AI) plus ready-to-paste titles &amp; hashtags.</p>
+          </div>
+        </div>
+
+        <form id="reelForm" class="clip-form">
+          <div class="drop-zone" id="reelDropZone" tabindex="0" role="button" aria-label="Upload pre-edited reel">
+            <input type="file" id="reelFileInput" accept=".mp4,.mkv,.webm,.mov,.m4v,.avi" class="hidden" />
+            <div class="drop-zone-inner" id="reelDropPrompt">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              <div>
+                <strong>Drop your pre-edited reel here</strong> or <span class="link-accent">browse file</span>
+                <div class="drop-sub">Supports MP4, MOV, MKV, WEBM • Keeps full duration &amp; framing</div>
+              </div>
+            </div>
+            <div class="drop-zone-selected hidden" id="reelFileSelected">
+              <span id="reelFileLabel"></span>
+              <button type="button" class="btn-ghost btn-sm" id="clearReelBtn">Change</button>
+            </div>
+          </div>
+
+          <div class="controls-grid">
+            <div class="control-box">
+              <label class="control-label">Caption Language</label>
+              <div class="seg-group" id="reelLangGroup">
+                <button type="button" class="seg-btn active" data-lang="auto">Auto</button>
+                <button type="button" class="seg-btn" data-lang="en">English</button>
+                <button type="button" class="seg-btn" data-lang="hi">Hindi (हिंदी)</button>
+                <button type="button" class="seg-btn" data-lang="hinglish">Hinglish</button>
+              </div>
+            </div>
+
+            <div class="control-box">
+              <label class="control-label">Highlight Color &amp; Audio</label>
+              <div class="caption-bar">
+                <div class="color-dots" id="reelColorDots" style="margin-left: 0">
+                  <button type="button" class="c-dot active" data-color="yellow" style="--c:#ffe600" aria-label="Yellow"></button>
+                  <button type="button" class="c-dot" data-color="cyan" style="--c:#00f0ff" aria-label="Cyan"></button>
+                  <button type="button" class="c-dot" data-color="lime" style="--c:#55ff32" aria-label="Lime"></button>
+                  <button type="button" class="c-dot" data-color="coral" style="--c:#ff4d6d" aria-label="Coral"></button>
+                </div>
+                <label class="check-label" style="margin-left: auto; margin-bottom: 0 !important;">
+                  <input type="checkbox" id="reelAudioBoostToggle" checked />
+                  <span>Voice Boost</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="control-box">
+              <label class="control-label">Reel Size / Framing</label>
+              <div class="seg-group" id="reelAspectGroup">
+                <button type="button" class="seg-btn active" data-aspect="original">Keep Original</button>
+                <button type="button" class="seg-btn" data-aspect="9:16">9:16 Crop</button>
+                <button type="button" class="seg-btn" data-aspect="16:9">16:9 Wide</button>
+              </div>
+            </div>
+          </div>
+
+          <details class="advanced-drawer">
+            <summary>Optional: Paste Custom Script / .SRT (Zero AI) or Add @Watermark</summary>
+            <div class="advanced-grid">
+              <div class="adv-field" style="grid-column: 1 / -1;">
+                <label for="reelScriptInput">Custom Script or .SRT Timestamps (leave blank to auto-transcribe offline)</label>
+                <textarea id="reelScriptInput" class="reel-textarea" rows="3" placeholder="Optional: Paste your exact script or .SRT captions here to sync word-by-word with Zero AI..."></textarea>
+              </div>
+              <div class="adv-field">
+                <label for="reelWatermarkInput">Channel Watermark (Optional)</label>
+                <input type="text" id="reelWatermarkInput" maxlength="32" placeholder="@YourHandle" />
+              </div>
+              <div class="adv-field">
+                <label for="reelQualitySelect">Export Quality (when resizing)</label>
+                <select id="reelQualitySelect">
+                  <option value="720p" selected>720p (Fast / Minimal PC)</option>
+                  <option value="1080p">1080p HD</option>
+                </select>
+              </div>
+            </div>
+          </details>
+
+          <div class="error-banner hidden" id="reelErrorBanner"></div>
+
+          <button type="submit" class="btn-primary btn-reel" id="reelSubmitBtn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            <span>Add Highlighted Captions to Reel</span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Live Progress Panel -->
+      <section class="progress-card hidden" id="progressCard">
+        <div class="progress-top">
+          <div>
+            <span class="stage-badge" id="stageBadge">Queued</span>
+            <h2 id="progressTitle">Preparing video...</h2>
+          </div>
+          <span class="progress-pct" id="progressPct">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+        <p class="progress-msg" id="progressMsg">Initializing local clipping pipeline...</p>
+      </section>
+
+      <!-- Results Gallery -->
+      <section class="results-section hidden" id="resultsSection">
+        <div class="results-header">
+          <div>
+            <h2>Generated Clips &amp; Upload Kit</h2>
+            <p class="ai-note" id="aiNote"></p>
+          </div>
+          <div class="results-actions">
+            <a class="btn-secondary" id="downloadAllBtn" href="#" download>Download All (.ZIP)</a>
+            <button type="button" class="btn-secondary" id="openFolderBtn">Open Output Folder</button>
+          </div>
+        </div>
+        <div class="clips-grid" id="clipsGrid"></div>
+      </section>
+
+      <!-- Recent Saved Jobs -->
+      <section class="history-section hidden" id="historySection">
+        <div class="history-header">
+          <h3>Recent Local Exports</h3>
+          <span class="history-hint">Click any batch to reload clips &amp; social copy</span>
+        </div>
+        <div class="history-list" id="historyList"></div>
+      </section>
+    </main>
+
+    <footer class="footer-credit">
+      <div class="credit-brand">
+        <img src="/favicon.png" alt="World Pixel Map icon" class="credit-logo" />
+        <div>
+          <div class="credit-org">
+            Created by <a href="https://worldpixelmap.in/" target="_blank" rel="noopener noreferrer">World Pixel Map</a>
+          </div>
+          <div class="credit-dev">Developer: <strong>HMJSarkar</strong></div>
+        </div>
+      </div>
+      <div class="credit-links">
+        <a href="https://worldpixelmap.in/" target="_blank" rel="noopener noreferrer">Website</a>
+        <a href="https://www.facebook.com/HMJSarkar" target="_blank" rel="noopener noreferrer">Facebook</a>
+        <a href="https://www.instagram.com/hmjsarkar" target="_blank" rel="noopener noreferrer">Instagram</a>
+        <a href="https://github.com/WorldPixelMap" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </div>
+    </footer>
+  </div>
+
+  <script src="/static/app.js?v=3.1"></script>
+</body>
+</html>
