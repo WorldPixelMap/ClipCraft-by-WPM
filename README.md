@@ -64,42 +64,39 @@ You do **not** need to be a programmer to run this. Just follow these 2 tiny ste
 
 ### Option 2: 1-Command Setup in Terminal
 
-Open **PowerShell** (or **Command Prompt**) inside the project folder and run **one single command**:
+Open **PowerShell** / **Command Prompt** (Windows) or **Terminal** (macOS / Linux) inside the project folder and run **one single command**:
 
 **Clone + open folder (if using Git):**
-```powershell
+```bash
 git clone https://github.com/WorldPixelMap/ClipCraft-by-WPM.git
 cd ClipCraft-by-WPM
 ```
 
-**Install EVERYTHING in 1 command (Windows):**
-```powershell
-.\install.bat
-```
-*(This automatically checks/installs **FFmpeg**, **Node.js LTS**, **Python 3.12**, creates `.venv`, installs every package inside [`requirements.txt`](requirements.txt), and caches the lightweight face tracker! Wait 1–2 minutes the first time.)*
+**Install EVERYTHING in 1 command (Windows, macOS & Linux):**
+- **Windows (PowerShell or CMD):**
+  ```powershell
+  .\install.bat
+  ```
+- **macOS & Linux:**
+  ```bash
+  bash install.bat
+  ```
+*(The single `install.bat` installer automatically works on **Windows, macOS, and Linux** — checking/installing **FFmpeg**, **Node.js**, **Python 3.12**, creating `.venv`, installing every package inside [`requirements.txt`](requirements.txt), and caching the lightweight face tracker! Wait 1–2 minutes the first time.)*
 
 **Start the app:**
-```powershell
-.\start.bat
-```
-*(Or double-click `start.bat` inside the folder!)*
+- **Windows:** Double-click `start.bat` (or run `.\start.bat`)
+- **macOS / Linux:** `.venv/bin/python run.py` then open **`http://127.0.0.1:8000`**
 
 ---
 
 <details>
-<summary><strong>macOS / Linux Setup or Manual `requirements.txt` Install (Click to expand)</strong></summary>
+<summary><strong>Manual `requirements.txt` Install (Optional — Click to expand)</strong></summary>
 
-1. **One-command installer (macOS / Linux):**
-   ```bash
-   bash install.sh
-   ```
-   *(Requires `ffmpeg` via `brew install ffmpeg node` on macOS or `sudo apt install ffmpeg nodejs python3-venv` on Ubuntu/Debian.)*
-
-2. **Install Python requirements manually into an existing Python 3.11–3.13 environment:**
-   ```bash
-   pip install -r requirements.txt
-   python run.py
-   ```
+If you already have FFmpeg, Node.js, and Python 3.11–3.13 installed:
+```bash
+pip install -r requirements.txt
+python run.py
+```
 
 </details>
 
@@ -173,11 +170,9 @@ You do **not** always need to sign in — many videos work immediately without l
 ├── screenshots/            # UI & output previews (1.png – 5.png)
 ├── tests/
 │   └── test_clipper.py     # Automated unit & synthetic pipeline test suite
-├── install.bat             # One-command / one-click Windows installer wrapper
-├── install.ps1             # Automated Windows setup (FFmpeg, Node.js, Python, .venv, pip)
-├── install.sh              # One-command macOS / Linux installer
+├── install.bat             # Universal 1-command installer (Windows, macOS & Linux)
 ├── start.bat               # One-click Windows launcher (auto-installs on first run)
-├── run.py                  # Cross-directory Python entrypoint
+├── run.py                  # Cross-platform Python entrypoint (python run.py)
 ├── requirements.txt        # Python dependencies
 ├── pyproject.toml          # Project configuration
 ├── favicon.png             # Project icon
