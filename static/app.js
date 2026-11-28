@@ -290,6 +290,7 @@ function captureCurrentPreset() {
     quality: $("qualitySelect").value,
     watermark: $("watermarkInput").value.trim(),
     hookBanner: $("hookBannerInput").value.trim(),
+    autoHook: $("autoHookToggle").checked,
     encoderMode: $("encoderModeSelect").value,
     musicVolume: $("musicVolumeInput").value,
     audioBoost: $("audioBoostToggle").checked,
@@ -320,6 +321,7 @@ const DEFAULT_PRESET = {
   quality: "720p",
   watermark: "",
   hookBanner: "",
+  autoHook: true,
   encoderMode: "auto",
   musicVolume: "14",
   audioBoost: true,
@@ -366,6 +368,13 @@ function applyPreset(p) {
   $("qualitySelect").value = cfg.quality;
   $("watermarkInput").value = cfg.watermark || "";
   $("hookBannerInput").value = cfg.hookBanner || "";
+  if ($("autoHookToggle")) {
+    const ah = cfg.autoHook !== false;
+    $("autoHookToggle").checked = ah;
+    if ($("autoHookStatusText")) {
+      $("autoHookStatusText").textContent = ah ? "Auto Hook Clip ON" : "Auto Hook Clip OFF";
+    }
+  }
   $("encoderModeSelect").value = cfg.encoderMode || "auto";
   $("musicVolumeInput").value = String(cfg.musicVolume || "14");
   $("musicVolVal").textContent = `${$("musicVolumeInput").value}%`;
@@ -703,6 +712,10 @@ function renderClips(job) {
       ? clip.words.map((w) => w.word).join(" ")
       : (clip.transcript_preview || "");
 
+    const hasHookClip = clip.hook_start !== null && clip.hook_start !== undefined && clip.hook_end !== null && clip.hook_end !== undefined;
+    const hookClipPart = hasHookClip ? `Teaser ${fmtTime(clip.hook_start)}–${fmtTime(clip.hook_end)} prepended` : "";
+    const hookBadgeText = [hookClipPart, clip.hook_banner || ""].filter(Boolean).join(" • ");
+
     card.innerHTML = `
       <div class="clip-video-wrap">
         <button type="button" class="safe-zone-toggle js-sz-btn" title="Preview TikTok / Reels / Shorts safe zones">Safe Zones</button>
@@ -721,6 +734,7 @@ function renderClips(job) {
           <span class="score-pill">Score ${clip.score}/100</span>
         </div>
         <div class="clip-time js-clip-time">${fmtTime(clip.start)} – ${fmtTime(clip.end)} (${Math.round(clip.duration)}s) • ${captionSourceLabel(clip.caption_source)}</div>
+        <div class="clip-hook-pill js-hook-badge ${hookBadgeText ? "" : "hidden"}">Hook: <strong>${escapeHtml(hookBadgeText)}</strong></div>
         <div class="reason-list">${reasonsHtml}</div>
 
         <button type="button" class="btn-ghost btn-xs js-toggle-edit" style="justify-content:flex-start;">✂ Trim &amp; Edit Captions</button>
@@ -743,6 +757,10 @@ function renderClips(job) {
                 <button type="button" class="trim-nudge js-e-plus">+1s</button>
               </div>
             </div>
+          </div>
+          <div class="trim-field">
+            <label>Top Hook Banner (First 4s)</label>
+            <input type="text" maxlength="80" class="js-edit-hook" value="${escapeHtml(clip.hook_banner || "")}" placeholder="Optional 4s top hook banner (leave blank to remove)..." />
           </div>
           <div class="trim-field">
             <label>Edit Caption Words</label>
@@ -797,7 +815,9 @@ function renderClips(job) {
     const toggleEditBtn = card.querySelector(".js-toggle-edit");
     const startInput = card.querySelector(".js-trim-start");
     const endInput = card.querySelector(".js-trim-end");
+    const hookInput = card.querySelector(".js-edit-hook");
     const textArea = card.querySelector(".js-edit-text");
+    const hookBadge = card.querySelector(".js-hook-badge");
     const editMsg = card.querySelector(".js-edit-msg");
     const saveEditBtn = card.querySelector(".js-save-edit");
 
@@ -826,6 +846,7 @@ function renderClips(job) {
           body: JSON.stringify({
             start: Number(startInput.value),
             end: Number(endInput.value),
+            hook_banner: hookInput ? hookInput.value.trim() : "",
             caption_text: textArea.value,
           }),
         });
@@ -839,6 +860,17 @@ function renderClips(job) {
 
         card.querySelector(".js-clip-time").textContent =
           `${fmtTime(updated.start)} – ${fmtTime(updated.end)} (${Math.round(updated.duration)}s) • ${captionSourceLabel(updated.caption_source)}`;
+        if (hookBadge) {
+          const uHasClip = updated.hook_start !== null && updated.hook_start !== undefined && updated.hook_end !== null && updated.hook_end !== undefined;
+          const uClipTxt = uHasClip ? `Teaser ${fmtTime(updated.hook_start)}–${fmtTime(updated.hook_end)} prepended` : "";
+          const uBadgeTxt = [uClipTxt, updated.hook_banner || ""].filter(Boolean).join(" • ");
+          if (uBadgeTxt) {
+            hookBadge.innerHTML = `Hook: <strong>${escapeHtml(uBadgeTxt)}</strong>`;
+            hookBadge.classList.remove("hidden");
+          } else {
+            hookBadge.classList.add("hidden");
+          }
+        }
         card.querySelector(".js-dl-mp4").href = updated.video_url;
         const srtEl = card.querySelector(".js-dl-srt");
         if (srtEl && updated.srt_url) srtEl.href = updated.srt_url;
@@ -981,6 +1013,7 @@ function buildClipRequestPayload(url) {
     manual_end: parseTimeInput($("manualEndInput").value),
     trim_silence: $("trimSilenceToggle").checked,
     hook_banner: $("hookBannerInput").value.trim(),
+    auto_hook: $("autoHookToggle").checked,
     streamer_cam_source: $("camSourceSelect").value,
     streamer_cam_target: state.camTarget,
     split_cam_position: state.splitCamPosition,
@@ -1123,6 +1156,15 @@ document.addEventListener("DOMContentLoaded", () => {
     $("colorDots").style.pointerEvents = on ? "auto" : "none";
     updatePipDiagram();
   });
+
+  if ($("autoHookToggle")) {
+    $("autoHookToggle").addEventListener("change", (e) => {
+      const on = e.target.checked;
+      if ($("autoHookStatusText")) {
+        $("autoHookStatusText").textContent = on ? "Auto Hook Clip ON" : "Auto Hook Clip OFF";
+      }
+    });
+  }
 
   $("captionPosSelect").addEventListener("change", updatePipDiagram);
 
@@ -1365,6 +1407,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (mEnd !== null) fd.append("manual_end", String(mEnd));
         fd.append("trim_silence", String($("trimSilenceToggle").checked));
         fd.append("hook_banner", $("hookBannerInput").value.trim());
+        fd.append("auto_hook", String($("autoHookToggle").checked));
         fd.append("streamer_cam_source", $("camSourceSelect").value);
         fd.append("streamer_cam_target", state.camTarget);
         fd.append("split_cam_position", state.splitCamPosition);
@@ -1544,6 +1587,7 @@ document.addEventListener("DOMContentLoaded", () => {
     fd.append("caption_position", $("captionPosSelect").value);
     fd.append("caption_scale", $("captionScaleSelect").value);
     fd.append("hook_banner", $("reelHookBannerInput").value.trim());
+    fd.append("auto_hook", String($("reelAutoHookToggle")?.checked || false));
     fd.append("trim_silence", String($("reelTrimSilenceToggle").checked));
     fd.append("keep_source", String($("keepSourceToggle").checked));
     fd.append("encoder_mode", $("encoderModeSelect").value);

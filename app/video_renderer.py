@@ -341,13 +341,14 @@ def render_clip(
     split_cam_position: SplitCamPosition = SplitCamPosition.TOP,
     audio_boost: bool = True,
     keep_intervals: list[tuple[float, float]] | None = None,
+    prepend_hook: tuple[float, float] | None = None,
     encoder_mode: EncoderMode = EncoderMode.AUTO,
     bg_music_path: Path | None = None,
     music_volume: float = 0.14,
     cancel_event: threading.Event | None = None,
     proc_cb: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> str:
-    """Cut clip (with optional jump-cut silence removal), reframe/split-screen, track faces, duck music & burn ASS captions."""
+    """Cut clip (with optional prepended hook teaser & jump-cut silence removal), reframe, track faces & burn ASS captions."""
     if cancel_event and cancel_event.is_set():
         raise RuntimeError("Job cancelled by user.")
 
@@ -360,49 +361,103 @@ def render_clip(
     active_start = start
     active_end = end
 
-    # Optional dead-air silence jump-cut pre-pass so face tracking & captions align cleanly on compacted timeline
-    has_jumpcuts = False
+    # Optional prepended video+audio hook teaser and/or dead-air jump-cut pre-pass
+    valid_ivs: list[tuple[float, float]] = []
     if keep_intervals and (
         len(keep_intervals) > 1
         or keep_intervals[0][0] > 0.25
         or keep_intervals[0][1] < clip_dur - 0.35
     ):
         valid_ivs = [(max(0.0, a), min(clip_dur, b)) for a, b in keep_intervals if b > a + 0.15]
-        if valid_ivs:
-            has_jumpcuts = True
-            jumpcut_mp4 = work_dir / f"_jumpcut_{output_mp4.stem}.mp4"
-            segs: list[str] = []
-            concat_refs: list[str] = []
-            for idx, (a, b) in enumerate(valid_ivs):
-                segs.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[jv{idx}]")
+
+    has_hook_clip = bool(
+        prepend_hook is not None and prepend_hook[1] > prepend_hook[0] + 0.8
+    )
+    precut_applied = False
+    if has_hook_clip or valid_ivs:
+        precut_applied = True
+        jumpcut_mp4 = work_dir / f"_precut_{output_mp4.stem}.mp4"
+        segs: list[str] = []
+        concat_refs: list[str] = []
+        a_cnt = 1 if src_info.has_audio else 0
+
+        if has_hook_clip and prepend_hook is not None:
+            h_start, h_end = prepend_hook
+            h_dur = max(0.5, h_end - h_start)
+            segs.append("[0:v]setsar=1,setpts=PTS-STARTPTS[hv]")
+            concat_refs.append("[hv]")
+            if src_info.has_audio:
+                fade_out_st = max(0.08, h_dur - 0.04)
+                segs.append(
+                    f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                    f"afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out_st:.3f}:d=0.04,"
+                    f"asetpts=PTS-STARTPTS[ha]"
+                )
+                concat_refs.append("[ha]")
+            main_idx = 1
+            pre_inputs = [
+                "-ss", f"{h_start:.3f}", "-t", f"{h_dur:.3f}", "-i", str(source_video.resolve()),
+                "-ss", f"{start:.3f}", "-t", f"{clip_dur:.3f}", "-i", str(source_video.resolve()),
+            ]
+        else:
+            main_idx = 0
+            pre_inputs = [
+                "-ss", f"{start:.3f}", "-t", f"{clip_dur:.3f}", "-i", str(source_video.resolve()),
+            ]
+
+        main_ivs = valid_ivs if valid_ivs else [(0.0, clip_dur)]
+        if len(main_ivs) == 1 and main_ivs[0][0] <= 0.01 and abs(main_ivs[0][1] - clip_dur) <= 0.05:
+            segs.append(f"[{main_idx}:v]setsar=1,setpts=PTS-STARTPTS[mv0]")
+            concat_refs.append("[mv0]")
+            if src_info.has_audio:
+                fade_in = ",afade=t=in:st=0:d=0.03" if has_hook_clip else ""
+                segs.append(
+                    f"[{main_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo{fade_in},"
+                    f"asetpts=PTS-STARTPTS[ma0]"
+                )
+                concat_refs.append("[ma0]")
+        else:
+            n_m = len(main_ivs)
+            if n_m > 1:
+                v_splits = "".join(f"[sv{i}]" for i in range(n_m))
+                segs.append(f"[{main_idx}:v]split={n_m}{v_splits}")
+                if src_info.has_audio:
+                    a_splits = "".join(f"[sa{i}]" for i in range(n_m))
+                    segs.append(f"[{main_idx}:a]asplit={n_m}{a_splits}")
+            for idx, (a, b) in enumerate(main_ivs):
+                v_src = f"sv{idx}" if n_m > 1 else f"{main_idx}:v"
+                segs.append(f"[{v_src}]trim=start={a:.3f}:end={b:.3f},setsar=1,setpts=PTS-STARTPTS[jv{idx}]")
                 concat_refs.append(f"[jv{idx}]")
                 if src_info.has_audio:
-                    segs.append(f"[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[ja{idx}]")
+                    a_src = f"sa{idx}" if n_m > 1 else f"{main_idx}:a"
+                    segs.append(
+                        f"[{a_src}]atrim=start={a:.3f}:end={b:.3f},"
+                        f"aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[ja{idx}]"
+                    )
                     concat_refs.append(f"[ja{idx}]")
-            a_cnt = 1 if src_info.has_audio else 0
-            jc_fc = ";".join(segs) + f";{''.join(concat_refs)}concat=n={len(valid_ivs)}:v=1:a={a_cnt}[vout]" + (
-                "[aout]" if src_info.has_audio else ""
-            )
-            jc_cmd = [
-                ffmpeg, "-v", "error", "-y",
-                "-ss", f"{start:.3f}",
-                "-i", str(source_video.resolve()),
-                "-t", f"{clip_dur:.3f}",
-                "-filter_complex", jc_fc,
-                "-map", "[vout]",
-                *(["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"] if src_info.has_audio else ["-an"]),
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "15", "-pix_fmt", "yuv420p",
-                str(jumpcut_mp4.resolve()),
-            ]
-            rc, err = _run_cancellable(jc_cmd, cwd=work_dir, cancel_event=cancel_event, proc_cb=proc_cb)
-            if rc == 0 and jumpcut_mp4.exists():
-                active_source = jumpcut_mp4
-                active_info = probe_video(jumpcut_mp4)
-                active_start = 0.0
-                active_end = max(0.5, active_info.duration)
-                clip_dur = active_end
-            else:
-                has_jumpcuts = False
+
+        total_segs = (1 if has_hook_clip else 0) + len(main_ivs)
+        jc_fc = ";".join(segs) + f";{''.join(concat_refs)}concat=n={total_segs}:v=1:a={a_cnt}[vout]" + (
+            "[aout]" if src_info.has_audio else ""
+        )
+        jc_cmd = [
+            ffmpeg, "-v", "error", "-y",
+            *pre_inputs,
+            "-filter_complex", jc_fc,
+            "-map", "[vout]",
+            *(["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"] if src_info.has_audio else ["-an"]),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "15", "-pix_fmt", "yuv420p",
+            str(jumpcut_mp4.resolve()),
+        ]
+        rc, err = _run_cancellable(jc_cmd, cwd=work_dir, cancel_event=cancel_event, proc_cb=proc_cb)
+        if rc == 0 and jumpcut_mp4.exists():
+            active_source = jumpcut_mp4
+            active_info = probe_video(jumpcut_mp4)
+            active_start = 0.0
+            active_end = max(0.5, active_info.duration)
+            clip_dur = active_end
+        else:
+            precut_applied = False
 
     # Run fast offline YuNet face tracking for corner PiP / split-screen and/or main 9:16 framing
     track_main = aspect_ratio == AspectRatio.VERTICAL_CROP and (active_info.width / max(1, active_info.height)) > (9.0 / 16.0)
@@ -544,7 +599,7 @@ def render_clip(
     input_args = ["-ss", f"{active_start:.3f}", "-i", str(active_source.resolve())]
     if use_music and bg_music_path:
         input_args += ["-stream_loop", "-1", "-i", str(bg_music_path.resolve())]
-    dur_out_args = [] if has_jumpcuts else ["-t", f"{clip_dur:.3f}"]
+    dur_out_args = [] if precut_applied else ["-t", f"{clip_dur:.3f}"]
 
     audio_out_args: list[str]
     if use_music:

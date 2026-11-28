@@ -122,6 +122,7 @@ class ClipRequest(BaseModel):
     manual_end: float | None = Field(default=None, gt=0.0)
     trim_silence: bool = Field(default=False)
     hook_banner: str = Field(default="", max_length=80)
+    auto_hook: bool = Field(default=True)
     streamer_cam_source: CornerPosition = Field(default=CornerPosition.OFF)
     streamer_cam_target: CornerPosition = Field(default=CornerPosition.TOP_RIGHT)
     split_cam_position: SplitCamPosition = Field(default=SplitCamPosition.TOP)
@@ -164,6 +165,7 @@ class MomentCandidate(BaseModel):
     transcript_score: float = 0.0
     reasons: list[str] = Field(default_factory=list)
     title_snippet: str = ""
+    hook_text: str = ""
 
 
 class SocialSuggestion(BaseModel):
@@ -197,6 +199,9 @@ class GeneratedClip(BaseModel):
         "none",
     ] = "none"
     transcript_preview: str = ""
+    hook_banner: str = ""
+    hook_start: float | None = None
+    hook_end: float | None = None
     words: list[WordTimestamp] = Field(default_factory=list)
     trimmed_silence_pct: float = 0.0
     social: SocialSuggestion | None = None

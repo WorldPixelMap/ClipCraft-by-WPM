@@ -6,7 +6,7 @@
   <title>Local ClipCraft by WPM — Offline-First Stream &amp; Video Clipper</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="shortcut icon" type="image/png" href="/favicon.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=4.2" />
+  <link rel="stylesheet" href="/static/styles.css?v=4.4" />
 </head>
 <body>
   <div class="app-shell">
@@ -135,6 +135,15 @@
                 <button type="button" class="seg-btn" data-aspect="9:16-fit">9:16 Blur</button>
                 <button type="button" class="seg-btn" data-aspect="split">Split 50/50</button>
                 <button type="button" class="seg-btn" data-aspect="16:9">16:9 Wide</button>
+              </div>
+
+              <label class="control-label sub-label">Prepended Video Hook (~3s Teaser)</label>
+              <div class="hook-bar">
+                <label class="switch" aria-label="Auto Hook Clip Before Every Clip">
+                  <input type="checkbox" id="autoHookToggle" checked />
+                  <span class="slider"></span>
+                </label>
+                <span class="switch-text" id="autoHookStatusText">Auto Hook Clip ON</span>
               </div>
             </div>
 
@@ -293,8 +302,8 @@
                     <input type="text" id="manualEndInput" maxlength="16" placeholder="e.g. 2:00 or 120" />
                   </div>
                   <div class="adv-field">
-                    <label for="hookBannerInput">Top Hook Banner (First 4s, Opt.)</label>
-                    <input type="text" id="hookBannerInput" maxlength="80" placeholder="WAIT FOR THE ENDING!" />
+                    <label for="hookBannerInput">Custom Hook Banner (Overrides Auto)</label>
+                    <input type="text" id="hookBannerInput" maxlength="80" placeholder="Leave blank for Auto Best Hook" />
                   </div>
                   <div class="adv-field">
                     <label for="encoderModeSelect">Video Encoder (GPU / CPU)</label>
@@ -618,6 +627,12 @@
                   <span>Trim Long Silences (Jump-Cut)</span>
                 </label>
               </div>
+              <div class="adv-field adv-check-wrap">
+                <label class="check-label">
+                  <input type="checkbox" id="reelAutoHookToggle" />
+                  <span>Auto-Add Best Hook Banner (4s)</span>
+                </label>
+              </div>
             </div>
           </details>
 
@@ -702,6 +717,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=4.2"></script>
+  <script src="/static/app.js?v=4.4"></script>
 </body>
 </html>

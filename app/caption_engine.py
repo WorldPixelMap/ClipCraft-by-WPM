@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import threading
 import unicodedata
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Literal
 
@@ -320,7 +323,157 @@ def extract_clip_words_from_youtube(
     return words, source
 
 
-HINDI_DEVANAGARI_PROMPT = "नमस्ते दोस्तों, आज के इस वीडियो में हम बात करेंगे।"
+HINDI_DEVANAGARI_PROMPT = "हिंदी में।"
+_DEVA_LEADING_MARK_RE = re.compile(r"^[\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962-\u0963\u0971]+")
+_INDIC_LANGS = {"hi", "ur", "pa", "bn", "mr", "ne"}
+
+
+def _merge_indic_word_tokens(raw_words: list[WordTimestamp]) -> list[WordTimestamp]:
+    """Attach split Devanagari combining marks/matras back onto the preceding word cleanly."""
+    merged: list[WordTimestamp] = []
+    for w in raw_words:
+        tok = (w.word or "").strip()
+        if not tok:
+            continue
+        if merged and _DEVA_LEADING_MARK_RE.match(tok):
+            prev = merged[-1]
+            merged[-1] = WordTimestamp(
+                word=prev.word + tok,
+                start=prev.start,
+                end=max(prev.end, w.end),
+            )
+        else:
+            merged.append(WordTimestamp(word=tok, start=w.start, end=w.end))
+    return merged
+
+
+def translate_phrases_to_hindi(
+    phrases: list[str],
+    ollama_model: str = "",
+    ai_provider: str = "auto",
+) -> list[str] | None:
+    """
+    Translate short caption phrases to Hindi (Devanagari).
+    Uses local Ollama/LM Studio when configured, otherwise falls back to free zero-key web translation.
+    """
+    clean_phrases = [re.sub(r"\s+", " ", p).strip() for p in phrases]
+    if not clean_phrases or not any(clean_phrases):
+        return None
+
+    # 1. Optional local AI translation when user enabled Ollama / LM Studio
+    if ollama_model.strip():
+        try:
+            from app.ollama_service import _local_ai_generate_json
+
+            numbered = "\n".join(f"{i}: {p}" for i, p in enumerate(clean_phrases) if p)
+            prompt = (
+                "Translate each numbered line accurately into natural conversational Hindi in Devanagari script.\n"
+                "Return JSON with key 'lines' mapping each string index to its Hindi translation.\n"
+                f"Lines:\n{numbered}"
+            )
+            res = _local_ai_generate_json(ollama_model, prompt, provider=ai_provider, timeout=22.0)
+            if res and isinstance(res.get("lines"), dict):
+                out = []
+                ok = True
+                for i, orig in enumerate(clean_phrases):
+                    tr = str(res["lines"].get(str(i)) or "").strip()
+                    if orig and not DEVANAGARI_RE.search(tr):
+                        ok = False
+                        break
+                    out.append(tr or orig)
+                if ok and len(out) == len(clean_phrases):
+                    return out
+        except Exception:
+            pass
+
+    # 2. Zero-key free web translation fallback (useful when YouTube timedtext tlang=hi returns HTTP 429)
+    def _gtx_batch(items: list[str]) -> list[str] | None:
+        if not items:
+            return []
+        joined = "\n".join(items)
+        query = urllib.parse.urlencode(
+            {"client": "gtx", "sl": "auto", "tl": "hi", "dt": "t", "q": joined}
+        )
+        req = urllib.request.Request(
+            f"https://translate.googleapis.com/translate_a/single?{query}",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            full = "".join(str(seg[0]) for seg in (data[0] or []) if seg and seg[0])
+            parts = [ln.strip() for ln in full.splitlines()]
+            if len(parts) == len(items) and all(parts):
+                return parts
+        except Exception:
+            return None
+        return None
+
+    translated: list[str] = []
+    chunk_size = 12
+    for i0 in range(0, len(clean_phrases), chunk_size):
+        chunk = clean_phrases[i0 : i0 + chunk_size]
+        res_chunk = _gtx_batch(chunk)
+        if res_chunk is None:
+            # Retry line-by-line if newline boundary collapsed
+            res_chunk = []
+            for item in chunk:
+                if not item:
+                    res_chunk.append("")
+                    continue
+                single = _gtx_batch([item])
+                if not single:
+                    return None
+                res_chunk.append(single[0])
+        translated.extend(res_chunk)
+
+    return translated if len(translated) == len(clean_phrases) else None
+
+
+def translate_words_to_hindi(
+    words: list[WordTimestamp],
+    audio: AudioAnalysis | None = None,
+    ollama_model: str = "",
+    ai_provider: str = "auto",
+) -> list[WordTimestamp] | None:
+    """Group timed words into natural phrases, translate to Hindi Devanagari, and re-pace word timings."""
+    if not words:
+        return None
+
+    phrase_groups: list[list[WordTimestamp]] = []
+    cur: list[WordTimestamp] = []
+    for w in words:
+        tok = w.word.strip()
+        if not tok:
+            continue
+        gap = (w.start - cur[-1].end) if cur else 0.0
+        if cur and (len(cur) >= 10 or gap > 0.45):
+            phrase_groups.append(cur)
+            cur = []
+        cur.append(w)
+        if tok.endswith((".", "?", "!", "।")) and len(cur) >= 3:
+            phrase_groups.append(cur)
+            cur = []
+    if cur:
+        phrase_groups.append(cur)
+
+    if not phrase_groups:
+        return None
+
+    eng_phrases = [" ".join(w.word.strip() for w in g) for g in phrase_groups]
+    hi_phrases = translate_phrases_to_hindi(
+        eng_phrases, ollama_model=ollama_model, ai_provider=ai_provider
+    )
+    if not hi_phrases:
+        return None
+
+    out_words: list[WordTimestamp] = []
+    for grp, hi_txt in zip(phrase_groups, hi_phrases):
+        p_start = grp[0].start
+        p_end = max(p_start + 0.25, grp[-1].end)
+        text_to_pace = hi_txt.strip() or " ".join(w.word.strip() for w in grp)
+        out_words.extend(_pace_segment_words_by_audio(text_to_pace, p_start, p_end, audio))
+    return out_words or None
 
 
 def _words_match_requested_language(words: list[WordTimestamp], caption_language: CaptionLanguage) -> bool:
@@ -391,27 +544,36 @@ def transcribe_clip_offline_tiny(
             whisper_lang = detected_lang
             whisper_task = "translate"
     elif caption_language == CaptionLanguage.HINDI:
-        whisper_lang = "hi"
-        whisper_task = "transcribe"
-        initial_prompt = HINDI_DEVANAGARI_PROMPT
-    elif caption_language == CaptionLanguage.HINGLISH:
-        if detected_lang == "en" and detected_prob >= 0.78:
-            whisper_lang = "en"
-            whisper_task = "transcribe"
-        else:
+        if not detected_lang or detected_lang in _INDIC_LANGS or detected_prob < 0.60:
             whisper_lang = "hi"
             whisper_task = "transcribe"
             initial_prompt = HINDI_DEVANAGARI_PROMPT
+        else:
+            # Non-Hindi audio (e.g. English): transcribe cleanly without forcing broken phonetic Hindi
+            whisper_lang = detected_lang
+            whisper_task = "transcribe" if detected_lang == "en" else "translate"
+    elif caption_language == CaptionLanguage.HINGLISH:
+        if detected_lang == "en" and detected_prob >= 0.65:
+            whisper_lang = "en"
+            whisper_task = "transcribe"
+        elif not detected_lang or detected_lang in _INDIC_LANGS or detected_prob < 0.60:
+            whisper_lang = "hi"
+            whisper_task = "transcribe"
+            initial_prompt = HINDI_DEVANAGARI_PROMPT
+        else:
+            whisper_lang = detected_lang
+            whisper_task = "translate"
     else:
         if detected_lang in {"hi", "ur"}:
             whisper_lang = "hi"
             initial_prompt = HINDI_DEVANAGARI_PROMPT
 
+    beam_sz = 2 if whisper_lang == "hi" else 1
     seg_iter, _ = model.transcribe(
         audio_np,
         language=whisper_lang,
         task=whisper_task,
-        beam_size=1,
+        beam_size=beam_sz,
         word_timestamps=True,
         vad_filter=True,
         condition_on_previous_text=False,
@@ -428,7 +590,7 @@ def transcribe_clip_offline_tiny(
             ws = max(0.0, float(w.start))
             we = min(clip_dur, max(ws + 0.06, float(w.end)))
             words.append(WordTimestamp(word=token, start=round(ws, 3), end=round(we, 3)))
-    return words
+    return _merge_indic_word_tokens(words)
 
 
 def _apply_language_format(words: list[WordTimestamp], caption_language: CaptionLanguage) -> list[WordTimestamp]:
@@ -452,8 +614,13 @@ def get_clip_words(
     work_dir: Path,
     rank: int,
     caption_language: CaptionLanguage = CaptionLanguage.AUTO,
+    ollama_model: str = "",
+    ai_provider: str = "auto",
 ) -> tuple[list[WordTimestamp], Literal["youtube_word_sync", "youtube_audio_paced", "offline_whisper_tiny", "none"], bool]:
-    """Resolve word-level timestamps with Zero-AI captions first and inbuilt offline tiny fallback."""
+    """Resolve word-level timestamps with Zero-AI captions first, offline tiny fallback & clean Hindi translation."""
+    yt_words: list[WordTimestamp] = []
+    yt_source: Literal["youtube_word_sync", "youtube_audio_paced", "none"] = "none"
+
     if mode != CaptionEngineMode.OFFLINE_AI and segments:
         yt_words, yt_source = extract_clip_words_from_youtube(segments, clip_start, clip_end, audio)
         if yt_words and (mode == CaptionEngineMode.NO_AI or _words_match_requested_language(yt_words, caption_language)):
@@ -462,8 +629,25 @@ def get_clip_words(
     if mode == CaptionEngineMode.NO_AI:
         return [], "none", False
 
+    # If YouTube gave clean non-Hindi captions (e.g. English when tlang=hi hit 429), translate directly to Hindi/Hinglish
+    if yt_words and caption_language in (CaptionLanguage.HINDI, CaptionLanguage.HINGLISH):
+        translated_hi = translate_words_to_hindi(
+            yt_words, audio=audio, ollama_model=ollama_model, ai_provider=ai_provider
+        )
+        if translated_hi:
+            return _apply_language_format(translated_hi, caption_language), yt_source, False
+        return _apply_language_format(yt_words, caption_language), yt_source, False
+
     ai_words = transcribe_clip_offline_tiny(video_path, clip_start, clip_end, caption_language)
     if ai_words:
+        if caption_language in (CaptionLanguage.HINDI, CaptionLanguage.HINGLISH) and not _words_match_requested_language(
+            ai_words, CaptionLanguage.HINDI
+        ):
+            translated_ai = translate_words_to_hindi(
+                ai_words, audio=audio, ollama_model=ollama_model, ai_provider=ai_provider
+            )
+            if translated_ai:
+                return _apply_language_format(translated_ai, caption_language), "offline_whisper_tiny", True
         return _apply_language_format(ai_words, caption_language), "offline_whisper_tiny", True
     return [], "none", True
 
@@ -676,7 +860,7 @@ def write_highlighted_ass_and_srt(
         margin_v = 0
     elif caption_position == CaptionPosition.TOP:
         alignment = 8
-        margin_v = int(round(video_h * (0.21 if (clean_hook and is_vertical) else (0.13 if is_vertical else 0.075))))
+        margin_v = int(round(video_h * (0.24 if (clean_hook and is_vertical) else (0.13 if is_vertical else 0.075))))
     else:
         alignment = 2
         margin_v = int(round(video_h * (0.18 if is_vertical else 0.075)))
@@ -706,13 +890,23 @@ def write_highlighted_ass_and_srt(
         outline_col = "&H00000000&"
         back_col = "&H96000000&"
 
-    has_devanagari = caption_language == CaptionLanguage.HINDI or any(DEVANAGARI_RE.search(w.word) for w in words)
+    has_devanagari = (
+        caption_language == CaptionLanguage.HINDI
+        or bool(DEVANAGARI_RE.search(clean_hook))
+        or any(DEVANAGARI_RE.search(w.word) for w in words)
+    )
     font_name = "Nirmala UI" if has_devanagari else "Arial"
 
     wm_size = max(18, int(round(video_h * 0.022)))
     wm_margin_v = max(18, int(round(video_h * 0.03)))
-    hook_size = max(22, int(round(video_h * (0.032 if is_vertical else 0.046))))
-    hook_margin_v = max(46, int(round(video_h * (0.085 if is_vertical else 0.065))))
+    hook_size = max(22, int(round(video_h * (0.031 if is_vertical else 0.046))))
+    if aspect_ratio == AspectRatio.SPLIT_SCREEN:
+        hook_margin_v = max(36, int(round(video_h * 0.055)))
+    elif is_vertical:
+        hook_margin_v = max(54, int(round(video_h * 0.115)))
+    else:
+        hook_margin_v = max(42, int(round(video_h * 0.065)))
+    hook_margin_lr = int(round(video_w * (0.10 if is_vertical else 0.08)))
     hook_pad = max(8, int(round(hook_size * 0.24)))
 
     ass_header = f"""[Script Info]
@@ -727,7 +921,7 @@ PlayResY: {video_h}
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font_name},{font_size},&H00FFFFFF&,&H00FFFFFF&,{outline_col},{back_col},{bold_flag},0,0,0,100,100,0,0,{border_style},{outline},{shadow},{alignment},{margin_lr},{margin_lr},{margin_v},1
 Style: Watermark,Arial,{wm_size},&H55FFFFFF&,&H55FFFFFF&,&H66000000&,&H00000000&,-1,0,0,0,100,100,0,0,1,2,1,8,20,20,{wm_margin_v},1
-Style: HookBanner,{font_name},{hook_size},&H0000E6FF&,&H0000E6FF&,&HD80F172A&,&HD80F172A&,-1,0,0,0,100,100,0,0,3,{hook_pad},0,8,{margin_lr},{margin_lr},{hook_margin_v},1
+Style: HookBanner,{font_name},{hook_size},&H0000E6FF&,&H0000E6FF&,&HD80F172A&,&HD80F172A&,-1,0,0,0,100,100,0,0,3,{hook_pad},0,8,{hook_margin_lr},{hook_margin_lr},{hook_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -745,7 +939,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if clean_hook:
         hook_end = min(4.5, max(1.0, clip_duration))
         dialogue_lines.append(
-            f"Dialogue: 1,0:00:00.00,{_format_ass_time(hook_end)},HookBanner,,0,0,0,,{_escape_ass(clean_hook)}"
+            f"Dialogue: 1,0:00:00.00,{_format_ass_time(hook_end)},HookBanner,,0,0,0,,{{\\fad(120,240)}}{_escape_ass(clean_hook)}"
         )
 
     if caption_style == CaptionStyle.POP:

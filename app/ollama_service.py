@@ -213,15 +213,14 @@ def _local_ai_generate_json(
     return _ollama_generate_json(model_id, prompt, timeout=timeout)
 
 
-def score_topic_relevance(
+def score_moments_with_local_ai(
     model: str,
-    topic: str,
     candidates: list[dict[str, Any]],
+    topic: str = "",
     provider: str = "auto",
 ) -> dict[int, float]:
-    """Ask local Ollama or LM Studio to score up to 8 candidate excerpts against a user topic (0..1)."""
-    clean_topic = topic.strip()
-    if not clean_topic or not model.strip() or not candidates:
+    """Ask local Ollama or LM Studio to score up to 8 excerpts by topic relevance or viral hook strength (0..1)."""
+    if not model.strip() or not candidates:
         return {}
 
     trimmed = candidates[:8]
@@ -233,8 +232,17 @@ def score_topic_relevance(
     if not lines:
         return {}
 
+    clean_topic = topic.strip()
+    if clean_topic:
+        goal_line = f"Rate how relevant each video excerpt is to the topic: '{clean_topic}'."
+    else:
+        goal_line = (
+            "Rate each video excerpt from 0.0 to 1.0 on viral short-form clip potential "
+            "(strong opening hook, curiosity, emotional punch, complete thought)."
+        )
+
     prompt = (
-        f"Rate how relevant each video excerpt is to the topic: '{clean_topic}'.\n"
+        f"{goal_line}\n"
         f"Return JSON with key 'scores' mapping string index to number 0.0-1.0.\n"
         f"Excerpts:\n" + "\n".join(lines)
     )
@@ -252,6 +260,18 @@ def score_topic_relevance(
     return out
 
 
+def score_topic_relevance(
+    model: str,
+    topic: str,
+    candidates: list[dict[str, Any]],
+    provider: str = "auto",
+) -> dict[int, float]:
+    """Ask local Ollama or LM Studio to score up to 8 candidate excerpts against a user topic (0..1)."""
+    if not topic.strip():
+        return {}
+    return score_moments_with_local_ai(model=model, candidates=candidates, topic=topic, provider=provider)
+
+
 def enhance_social_hook_with_ollama(
     model: str,
     clip_text: str,
@@ -260,25 +280,31 @@ def enhance_social_hook_with_ollama(
     language_hint: str = "auto",
     provider: str = "auto",
 ) -> dict[str, str] | None:
-    """Optionally polish short hook title and caption using local Ollama or LM Studio."""
+    """Optionally polish on-screen hook banner, short viral title, and caption via local Ollama or LM Studio."""
     snippet = clip_text.strip()[:700]
     if not model.strip() or len(snippet) < 15:
         return None
 
     prompt = (
-        f"You write punchy viral short-video titles and 2-sentence captions for {platform} Shorts/Reels.\n"
+        f"You write punchy viral short-video hooks, titles, and 2-sentence captions for {platform} Shorts/Reels.\n"
         f"Language preference: {language_hint}. Source video: {video_title[:120]}.\n"
         f"Clip transcript: {snippet}\n"
-        f"Return JSON with keys: 'title' (<= 65 chars, no quotes), 'hook_caption' (1-2 engaging sentences)."
+        f"Return JSON with keys: 'hook_banner' (<= 44 chars, 3-6 punchy words for top video banner, no quotes), "
+        f"'title' (<= 65 chars, no quotes), 'hook_caption' (1-2 engaging sentences)."
     )
     res = _local_ai_generate_json(model, prompt, provider=provider, timeout=18.0)
     if not res:
         return None
     title = str(res.get("title") or "").strip().strip('"')
     hook_caption = str(res.get("hook_caption") or "").strip()
-    if not title:
+    hook_banner = str(res.get("hook_banner") or "").strip().strip('"')
+    if not title and not hook_banner:
         return None
-    return {"title": title[:70], "hook_caption": hook_caption[:320]}
+    return {
+        "hook_banner": hook_banner[:56],
+        "title": title[:70],
+        "hook_caption": hook_caption[:320],
+    }
 
 
 enhance_social_hook_with_local_ai = enhance_social_hook_with_ollama

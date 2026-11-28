@@ -16,11 +16,13 @@ from pathlib import Path
 
 from app.caption_engine import (
     _apply_language_format,
+    _words_match_requested_language,
     align_edited_text_to_words,
     get_clip_words,
     parse_custom_script_or_srt,
     remap_words_after_jump_cuts,
     transcribe_clip_offline_tiny,
+    translate_words_to_hindi,
     write_highlighted_ass_and_srt,
 )
 from app.models import (
@@ -46,9 +48,15 @@ from app.moment_detector import (
     analyze_audio_signal,
     compute_speech_keep_intervals,
     detect_best_moments,
+    find_clip_hook_interval,
 )
 from app.ollama_service import enhance_social_hook_with_ollama, format_ai_label
-from app.social_suggester import build_platform_captions, suggest_social_metadata
+from app.social_suggester import (
+    _normalize_hook_key,
+    build_platform_captions,
+    generate_best_hook_banner,
+    suggest_social_metadata,
+)
 from app.video_renderer import probe_video, render_clip, target_dimensions
 from app.youtube_service import (
     VideoInspection,
@@ -144,22 +152,21 @@ def _load_cached_source(
         insp = VideoInspection(**meta["inspection"])
         lang_key = caption_language.value
         subs_file = cdir / f"subs_{lang_key}.json"
-        segs: list[TranscriptSegment]
+        segs: list[TranscriptSegment] = []
         if subs_file.exists():
             segs = [TranscriptSegment.model_validate(s) for s in json.loads(subs_file.read_text(encoding="utf-8"))]
-        elif raw_url and work_dir is not None:
-            # Reuse cached video while fetching subtitles for the newly requested language
+        if not segs and raw_url and work_dir is not None and (insp.caption_languages or not subs_file.exists()):
+            # Reuse cached video while fetching subtitles (retrying if an earlier transient 429 cached empty)
             segs = fetch_captions_only(
                 raw_url,
                 work_dir=work_dir,
                 preferred_language=caption_language,
                 cookies_browser=cookies_browser,
             )
-            subs_file.write_text(json.dumps([s.model_dump() for s in segs]), encoding="utf-8")
-        elif meta.get("caption_language") == lang_key:
+            if segs:
+                subs_file.write_text(json.dumps([s.model_dump() for s in segs]), encoding="utf-8")
+        elif not segs and meta.get("caption_language") == lang_key:
             segs = [TranscriptSegment.model_validate(s) for s in meta.get("segments", [])]
-        else:
-            segs = []
         cdir.touch(exist_ok=True)
         return vid, segs, insp
     except Exception:
@@ -200,9 +207,10 @@ def _save_cached_source(
         "segments": [s.model_dump() for s in segments],
     }
     (cdir / "meta.json").write_text(json.dumps(payload), encoding="utf-8")
-    (cdir / f"subs_{caption_language.value}.json").write_text(
-        json.dumps([s.model_dump() for s in segments]), encoding="utf-8"
-    )
+    if segments or not inspection.caption_languages:
+        (cdir / f"subs_{caption_language.value}.json").write_text(
+            json.dumps([s.model_dump() for s in segments]), encoding="utf-8"
+        )
     _prune_source_cache(keep_dir=cdir)
     return dest
 
@@ -221,7 +229,7 @@ def _apply_ollama_social_polish(
     channel_url: str = "",
     source_url: str = "",
 ):
-    """Optionally refine social title and hook caption via local Ollama/LM Studio while preserving creator credit & hashtags."""
+    """Optionally refine on-screen hook, social title & caption via local Ollama/LM Studio while preserving creator credit."""
     polished = enhance_social_hook_with_ollama(
         model=ollama_model,
         clip_text=clip_text,
@@ -231,9 +239,10 @@ def _apply_ollama_social_polish(
         provider=ai_provider,
     )
     if not polished:
-        return social
+        return social, ""
     title = polished["title"] or social.title
     hook_cap = polished.get("hook_caption") or ""
+    ai_hook_banner = polished.get("hook_banner") or ""
     yt_caption, fb_caption, copy_yt, copy_fb = build_platform_captions(
         title=title,
         body_block=hook_cap,
@@ -251,7 +260,7 @@ def _apply_ollama_social_polish(
     social.facebook_caption = fb_caption
     social.copy_all_youtube = copy_yt
     social.copy_all_facebook = copy_fb
-    return social
+    return social, ai_hook_banner
 
 
 class JobManager:
@@ -411,6 +420,7 @@ class JobManager:
         caption_position: CaptionPosition = CaptionPosition.BOTTOM,
         caption_scale: float = 1.0,
         hook_banner: str = "",
+        auto_hook: bool = False,
         trim_silence: bool = False,
         keep_source: bool = False,
         encoder_mode: EncoderMode = EncoderMode.AUTO,
@@ -426,6 +436,7 @@ class JobManager:
             "caption_position": caption_position.value,
             "caption_scale": caption_scale,
             "hook_banner": hook_banner,
+            "auto_hook": auto_hook,
             "trim_silence": trim_silence,
             "keep_source": keep_source,
             "encoder_mode": encoder_mode.value,
@@ -464,6 +475,7 @@ class JobManager:
             caption_position,
             caption_scale,
             hook_banner,
+            auto_hook,
             trim_silence,
             keep_source,
             encoder_mode,
@@ -679,6 +691,7 @@ class JobManager:
         caption_position: CaptionPosition,
         caption_scale: float,
         hook_banner: str,
+        auto_hook: bool,
         trim_silence: bool,
         keep_source: bool,
         encoder_mode: EncoderMode,
@@ -745,6 +758,14 @@ class JobManager:
                     message="Generating word timestamps using inbuilt offline Whisper-tiny...",
                 )
                 raw_words = transcribe_clip_offline_tiny(active_video, 0.0, dur, caption_language)
+                if (
+                    raw_words
+                    and caption_language in (CaptionLanguage.HINDI, CaptionLanguage.HINGLISH)
+                    and not _words_match_requested_language(raw_words, CaptionLanguage.HINDI)
+                ):
+                    translated_reel = translate_words_to_hindi(raw_words, audio=audio)
+                    if translated_reel:
+                        raw_words = translated_reel
                 words = _apply_language_format(raw_words, caption_language)
                 ai_used = True
                 caption_source = "offline_whisper_tiny" if words else "none"
@@ -757,10 +778,29 @@ class JobManager:
             w_out, h_out = target_dimensions(aspect_ratio, quality, src_info=src_info)
             ass_path: Path | None = None
             srt_path: Path | None = None
-            full_text = ""
+            full_text = " ".join(w.word.strip() for w in words) if words else ""
             preview = ""
 
-            if words or watermark_text.strip() or hook_banner.strip():
+            effective_hook_banner = hook_banner.strip()
+            if not effective_hook_banner and auto_hook:
+                reel_moment = MomentCandidate(
+                    rank=1,
+                    start=0.0,
+                    end=round(dur, 2),
+                    duration=round(effective_dur, 2),
+                    score=100.0,
+                    reasons=["Full Pre-Edited Reel", "Highlighted Captions"],
+                )
+                effective_hook_banner = generate_best_hook_banner(
+                    clip_text=full_text,
+                    video_title=title,
+                    moment=reel_moment,
+                    platform="Reels / Shorts",
+                    caption_language=caption_language,
+                    words=words,
+                )
+
+            if words or watermark_text.strip() or effective_hook_banner:
                 ass_path = work_dir / "reel_1.ass"
                 srt_path = (job_dir / "reel_captioned.srt") if words else None
                 preview = write_highlighted_ass_and_srt(
@@ -777,10 +817,8 @@ class JobManager:
                     caption_style=caption_style,
                     caption_position=caption_position,
                     caption_scale=caption_scale,
-                    hook_banner=hook_banner,
+                    hook_banner=effective_hook_banner,
                 )
-                if words:
-                    full_text = " ".join(w.word.strip() for w in words)
 
             self.update_job(
                 job_id,
@@ -859,6 +897,7 @@ class JobManager:
                 reasons=reasons,
                 caption_source=caption_source,
                 transcript_preview=preview,
+                hook_banner=effective_hook_banner,
                 words=words,
                 trimmed_silence_pct=round(trimmed_pct * 100, 1),
                 social=social,
@@ -967,6 +1006,7 @@ class JobManager:
         encoder_used = "libx264"
         w_out, h_out = target_dimensions(req.aspect_ratio, req.quality, src_info=src_info)
         bg_music_path = resolve_bg_music(req.bg_music_id)
+        used_hooks: set[str] = set()
 
         social_dump_lines: list[str] = [
             "Local ClipCraft by WPM — Social Upload Kit",
@@ -982,7 +1022,7 @@ class JobManager:
                 job_id,
                 stage=f"Generating Clip {idx}/{total}",
                 progress=base_pct,
-                message=f"Tracking faces, syncing captions & rendering clip {idx} of {total}...",
+                message=f"Tracking faces, crafting best hook, syncing captions & rendering clip {idx} of {total}...",
             )
 
             keep_intervals: list[tuple[float, float]] | None = None
@@ -991,6 +1031,19 @@ class JobManager:
             if req.trim_silence:
                 keep_intervals, trimmed_pct = compute_speech_keep_intervals(audio_analysis, m.start, m.end)
                 effective_dur = max(0.5, sum(b - a for a, b in keep_intervals))
+
+            prepend_hook: tuple[float, float] | None = None
+            if req.auto_hook:
+                prepend_hook = find_clip_hook_interval(
+                    audio=audio_analysis,
+                    clip_start=m.start,
+                    clip_end=m.end,
+                    duration=true_duration,
+                    heatmap=inspection.heatmap,
+                    segments=segments,
+                )
+            hook_dur = round(prepend_hook[1] - prepend_hook[0], 3) if prepend_hook else 0.0
+            total_effective_dur = round(hook_dur + effective_dur, 2)
 
             ass_path: Path | None = None
             srt_path: Path | None = None
@@ -1010,43 +1063,68 @@ class JobManager:
                     work_dir=work_dir,
                     rank=idx,
                     caption_language=req.caption_language,
+                    ollama_model=ollama_model,
+                    ai_provider=req.ai_provider.value,
                 )
                 if ai_flag:
                     any_ai_used = True
                 if words:
                     full_clip_text = " ".join(w.word.strip() for w in words)
-                    if req.trim_silence and keep_intervals and trimmed_pct > 0.0:
-                        words = remap_words_after_jump_cuts(words, keep_intervals)
-
-            if words or req.watermark_text.strip() or req.hook_banner.strip():
-                ass_path = work_dir / f"clip_{idx}.ass"
-                srt_path = (job_dir / f"clip_{idx}.srt") if words else None
-                rendered_preview = write_highlighted_ass_and_srt(
-                    words=words,
-                    ass_path=ass_path,
-                    srt_path=srt_path,
-                    video_w=w_out,
-                    video_h=h_out,
-                    clip_duration=effective_dur,
-                    aspect_ratio=req.aspect_ratio,
-                    highlight_color=req.highlight_color,
-                    caption_language=req.caption_language,
-                    watermark_text=req.watermark_text,
-                    caption_style=req.caption_style,
-                    caption_position=req.caption_position,
-                    caption_scale=req.caption_scale,
-                    hook_banner=req.hook_banner,
-                )
-                if words:
-                    preview = rendered_preview
+                    hook_words: list[WordTimestamp] = []
+                    if prepend_hook is not None and hook_dur > 0.0:
+                        h_rel_s = prepend_hook[0] - m.start
+                        h_rel_e = prepend_hook[1] - m.start
+                        for w in words:
+                            if w.end <= h_rel_s or w.start >= h_rel_e:
+                                continue
+                            ws = max(0.0, round(w.start - h_rel_s, 3))
+                            we = min(hook_dur, max(ws + 0.06, round(w.end - h_rel_s, 3)))
+                            if we > ws + 0.02:
+                                hook_words.append(WordTimestamp(word=w.word, start=ws, end=we))
+                    main_words = (
+                        remap_words_after_jump_cuts(words, keep_intervals)
+                        if (req.trim_silence and keep_intervals and trimmed_pct > 0.0)
+                        else words
+                    )
+                    if prepend_hook is not None and hook_dur > 0.0:
+                        shifted_main = [
+                            WordTimestamp(
+                                word=w.word,
+                                start=round(w.start + hook_dur, 3),
+                                end=round(w.end + hook_dur, 3),
+                            )
+                            for w in main_words
+                        ]
+                        words = hook_words + shifted_main
+                    else:
+                        words = main_words
             elif segments:
                 seg_slice = [s.text for s in segments if s.end > m.start and s.start < m.end]
                 if seg_slice:
                     full_clip_text = " ".join(seg_slice)
 
             reasons = list(m.reasons)
+            if prepend_hook is not None and hook_dur > 0.0:
+                reasons.insert(0, f"Hook Teaser +{hook_dur:.1f}s")
             if trimmed_pct > 0.0:
                 reasons.append(f"Jump-Cut -{int(round(trimmed_pct * 100))}% Silence")
+
+            manual_hook = req.hook_banner.strip()
+            if manual_hook:
+                effective_hook_banner = manual_hook
+            elif req.auto_hook:
+                effective_hook_banner = generate_best_hook_banner(
+                    clip_text=full_clip_text,
+                    video_title=inspection.title,
+                    moment=m,
+                    platform=inspection.platform,
+                    caption_language=req.caption_language,
+                    video_tags=inspection.tags,
+                    used_hooks=used_hooks,
+                    words=words,
+                )
+            else:
+                effective_hook_banner = ""
 
             social = suggest_social_metadata(
                 clip_text=full_clip_text,
@@ -1061,7 +1139,7 @@ class JobManager:
                 source_url=inspection.source_url or (req.url if "example.com/local" not in req.url else ""),
             )
             if ollama_model:
-                social = _apply_ollama_social_polish(
+                social, ai_hook_banner = _apply_ollama_social_polish(
                     social=social,
                     clip_text=full_clip_text,
                     video_title=inspection.title,
@@ -1075,10 +1153,40 @@ class JobManager:
                     channel_url=inspection.channel_url,
                     source_url=inspection.source_url or (req.url if "example.com/local" not in req.url else ""),
                 )
+                if not manual_hook and req.auto_hook and ai_hook_banner:
+                    ai_key = _normalize_hook_key(ai_hook_banner)
+                    if ai_key and ai_key not in used_hooks:
+                        used_hooks.add(ai_key)
+                        effective_hook_banner = ai_hook_banner
 
+            if words or req.watermark_text.strip() or effective_hook_banner:
+                ass_path = work_dir / f"clip_{idx}.ass"
+                srt_path = (job_dir / f"clip_{idx}.srt") if words else None
+                rendered_preview = write_highlighted_ass_and_srt(
+                    words=words,
+                    ass_path=ass_path,
+                    srt_path=srt_path,
+                    video_w=w_out,
+                    video_h=h_out,
+                    clip_duration=total_effective_dur,
+                    aspect_ratio=req.aspect_ratio,
+                    highlight_color=req.highlight_color,
+                    caption_language=req.caption_language,
+                    watermark_text=req.watermark_text,
+                    caption_style=req.caption_style,
+                    caption_position=req.caption_position,
+                    caption_scale=req.caption_scale,
+                    hook_banner=effective_hook_banner,
+                )
+                if words:
+                    preview = rendered_preview
+
+            hook_dump = f" | Hook: {effective_hook_banner}" if effective_hook_banner else ""
+            if prepend_hook is not None:
+                hook_dump += f" (Prepended {prepend_hook[0]}s-{prepend_hook[1]}s)"
             social_dump_lines.extend(
                 [
-                    f"--- CLIP #{idx} ({m.start}s - {m.end}s) | Score {m.score}/100 ---",
+                    f"--- CLIP #{idx} ({m.start}s - {m.end}s) | Score {m.score}/100{hook_dump} ---",
                     f"YOUTUBE SHORTS:\n{social.copy_all_youtube}",
                     "",
                     f"FACEBOOK REELS:\n{social.copy_all_facebook}",
@@ -1104,6 +1212,7 @@ class JobManager:
                 split_cam_position=req.split_cam_position,
                 audio_boost=req.audio_boost,
                 keep_intervals=keep_intervals if (req.trim_silence and trimmed_pct > 0.0) else None,
+                prepend_hook=prepend_hook,
                 encoder_mode=req.encoder_mode,
                 bg_music_path=bg_music_path,
                 music_volume=req.music_volume,
@@ -1122,11 +1231,14 @@ class JobManager:
                     thumb_url=f"/output/{job_id}/{out_thumb.name}" if out_thumb.exists() else None,
                     start=m.start,
                     end=m.end,
-                    duration=round(effective_dur, 2),
+                    duration=total_effective_dur,
                     score=m.score,
                     reasons=reasons[:4],
                     caption_source=caption_source,
                     transcript_preview=preview,
+                    hook_banner=effective_hook_banner,
+                    hook_start=prepend_hook[0] if prepend_hook else None,
+                    hook_end=prepend_hook[1] if prepend_hook else None,
                     words=words,
                     trimmed_silence_pct=round(trimmed_pct * 100, 1),
                     social=social,
@@ -1202,7 +1314,16 @@ class JobManager:
         new_end = clip.end if patch.end is None else min(total_dur, float(patch.end))
         if new_end <= new_start + 0.5:
             raise ValueError("End time must be at least 0.5s after start time.")
-        new_dur = round(new_end - new_start, 2)
+        trim_changed = (patch.start is not None and abs(new_start - clip.start) > 0.05) or (
+            patch.end is not None and abs(new_end - clip.end) > 0.05
+        )
+        prepend_hook = (
+            (clip.hook_start, clip.hook_end)
+            if (not trim_changed and clip.hook_start is not None and clip.hook_end is not None and clip.hook_end > clip.hook_start + 0.8)
+            else None
+        )
+        hook_dur = round(prepend_hook[1] - prepend_hook[0], 3) if prepend_hook else 0.0
+        new_dur = round((new_end - new_start) + hook_dur, 2)
 
         aspect_ratio = AspectRatio(opts.get("aspect_ratio", AspectRatio.VERTICAL_CROP.value))
         quality = QualityPreset(opts.get("quality", QualityPreset.FAST.value))
@@ -1211,7 +1332,11 @@ class JobManager:
         cap_style = patch.caption_style or CaptionStyle(opts.get("caption_style", CaptionStyle.CLASSIC.value))
         cap_pos = patch.caption_position or CaptionPosition(opts.get("caption_position", CaptionPosition.BOTTOM.value))
         cap_scale = float(patch.caption_scale if patch.caption_scale is not None else opts.get("caption_scale", 1.0))
-        hook_banner = str(patch.hook_banner if patch.hook_banner is not None else opts.get("hook_banner", ""))
+        hook_banner = str(
+            patch.hook_banner
+            if patch.hook_banner is not None
+            else (clip.hook_banner or opts.get("hook_banner", ""))
+        ).strip()
         watermark = str(opts.get("watermark_text", ""))
         audio_boost = bool(opts.get("audio_boost", True))
         cam_src = CornerPosition(opts.get("streamer_cam_source", CornerPosition.OFF.value))
@@ -1300,6 +1425,7 @@ class JobManager:
                 streamer_cam_target=cam_tgt,
                 split_cam_position=split_cam_pos,
                 audio_boost=audio_boost,
+                prepend_hook=prepend_hook,
                 encoder_mode=enc_mode,
                 bg_music_path=bg_music,
                 music_volume=music_vol,
@@ -1314,6 +1440,9 @@ class JobManager:
                     "words": words,
                     "caption_source": cap_source,
                     "transcript_preview": preview,
+                    "hook_banner": hook_banner,
+                    "hook_start": prepend_hook[0] if prepend_hook else None,
+                    "hook_end": prepend_hook[1] if prepend_hook else None,
                     "srt_filename": srt_path.name if srt_path and srt_path.exists() else None,
                     "video_url": f"/output/{job_id}/{out_mp4.name}?v={ver}",
                     "srt_url": f"/output/{job_id}/{srt_path.name}?v={ver}" if srt_path and srt_path.exists() else None,

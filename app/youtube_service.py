@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -560,6 +561,92 @@ def _parse_downloaded_subtitles(work_dir: Path, langs: list[str]) -> list[Transc
     return segments
 
 
+def _download_subtitles_safely(
+    ydl: yt_dlp.YoutubeDL,
+    info: dict[str, Any],
+    work_dir: Path,
+    langs: list[str],
+    cancel_event: threading.Event | None = None,
+) -> list[TranscriptSegment]:
+    """
+    Download best matching subtitle track (json3/vtt) without ever aborting the video job on HTTP 429/network errors.
+    """
+    if not langs:
+        return []
+
+    manual_subs = info.get("subtitles") or {}
+    auto_subs = info.get("automatic_captions") or {}
+    video_id = str(info.get("id") or "video")
+
+    saved_hooks = list(getattr(ydl, "_progress_hooks", []))
+    saved_writesubs = ydl.params.get("writesubtitles")
+    saved_writeauto = ydl.params.get("writeautomaticsub")
+    saved_sublangs = ydl.params.get("subtitleslangs")
+    saved_subfmt = ydl.params.get("subtitlesformat")
+
+    try:
+        ydl._progress_hooks = []
+        ydl.params["writesubtitles"] = True
+        ydl.params["writeautomaticsub"] = True
+        ydl.params["subtitlesformat"] = "json3/vtt/best"
+
+        for lang in langs[:2]:
+            if cancel_event and cancel_event.is_set():
+                raise RuntimeError("Job cancelled by user.")
+
+            ydl.params["subtitleslangs"] = [lang]
+            sub_map = ydl.process_subtitles(video_id, manual_subs, auto_subs) or {}
+            sub_info = sub_map.get(lang)
+            if not sub_info:
+                continue
+
+            sub_ext = str(sub_info.get("ext") or "vtt")
+            dest_path = work_dir / f"source.{lang}.{sub_ext}"
+            if sub_info.get("data") is not None:
+                dest_path.write_text(str(sub_info["data"]), encoding="utf-8")
+                segs = _parse_downloaded_subtitles(work_dir, [lang])
+                if segs:
+                    return segs
+                continue
+
+            sub_copy = dict(sub_info)
+            if not sub_copy.get("http_headers") and info.get("http_headers"):
+                sub_copy["http_headers"] = info.get("http_headers")
+
+            hit_rate_limit = False
+            for attempt in range(2):
+                if cancel_event and cancel_event.is_set():
+                    raise RuntimeError("Job cancelled by user.")
+                try:
+                    ydl.dl(str(dest_path), sub_copy, subtitle=True)
+                    if dest_path.exists() and dest_path.stat().st_size > 10:
+                        segs = _parse_downloaded_subtitles(work_dir, [lang])
+                        if segs:
+                            return segs
+                    break
+                except Exception as sub_exc:
+                    dest_path.unlink(missing_ok=True)
+                    err_low = str(sub_exc).lower()
+                    if "429" in err_low or "too many requests" in err_low:
+                        hit_rate_limit = True
+                        if attempt == 0:
+                            time.sleep(1.2)
+                            continue
+                    break
+
+            if hit_rate_limit:
+                # Stop hammering timedtext once YouTube returns 429; offline Whisper-tiny will take over cleanly
+                break
+    finally:
+        ydl._progress_hooks = saved_hooks
+        ydl.params["writesubtitles"] = saved_writesubs
+        ydl.params["writeautomaticsub"] = saved_writeauto
+        ydl.params["subtitleslangs"] = saved_sublangs
+        ydl.params["subtitlesformat"] = saved_subfmt
+
+    return _parse_downloaded_subtitles(work_dir, langs)
+
+
 def fetch_captions_only(
     url: str,
     work_dir: Path,
@@ -579,8 +666,8 @@ def fetch_captions_only(
         {
             "skip_download": True,
             "outtmpl": str(work_dir / "source.%(ext)s"),
-            "writesubtitles": True,
-            "writeautomaticsub": True,
+            "writesubtitles": False,
+            "writeautomaticsub": False,
             "subtitlesformat": "json3/vtt/best",
         }
     )
@@ -591,11 +678,12 @@ def fetch_captions_only(
             langs = list(inspection.caption_languages)
             if not langs and preferred_language == CaptionLanguage.AUTO:
                 langs = ["en", "en-US", "en-GB"]
-            if not langs:
-                return []
-            ydl.params["subtitleslangs"] = langs[:2]
-            ydl.process_ie_result(info, download=True)
-            return _parse_downloaded_subtitles(work_dir, langs)
+            segs = _download_subtitles_safely(ydl, info, work_dir, langs) if langs else []
+            if not segs and preferred_language != CaptionLanguage.AUTO:
+                fallback_langs = [c for c in _select_caption_languages(info, CaptionLanguage.AUTO) if c not in langs]
+                if fallback_langs:
+                    segs = _download_subtitles_safely(ydl, info, work_dir, fallback_langs)
+            return segs
     except Exception:
         return []
 
@@ -611,7 +699,7 @@ def download_video_and_captions(
     inspection_cb: Callable[[VideoInspection], None] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> tuple[Path, list[TranscriptSegment], dict[str, Any], VideoInspection]:
-    """Single-fetch download of video + captions (avoids hitting YouTube twice per job)."""
+    """Single-fetch download of video + rate-limit-resilient captions (never fails the video on subtitle 429)."""
     work_dir.mkdir(parents=True, exist_ok=True)
     clean_url, platform = validate_video_url(url)
 
@@ -642,15 +730,16 @@ def download_video_and_captions(
             ),
             "merge_output_format": "mp4",
             "outtmpl": out_template,
-            "writesubtitles": True,
-            "writeautomaticsub": True,
-            "subtitleslangs": preferred_langs[:2] if preferred_langs else [],
+            "writesubtitles": False,
+            "writeautomaticsub": False,
+            "subtitleslangs": [],
             "subtitlesformat": "json3/vtt/best",
             "progress_hooks": [_hook],
         }
     )
 
     langs: list[str] = []
+    segments: list[TranscriptSegment] = []
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
@@ -665,10 +754,21 @@ def download_video_and_captions(
                 langs = ["en", "en-US", "en-GB"]
             else:
                 langs = []
-            ydl.params["subtitleslangs"] = langs[:2] if langs else []
-            ydl.params["writesubtitles"] = bool(langs)
-            ydl.params["writeautomaticsub"] = bool(langs)
+            # Download video stream first without subtitle flags so HTTP 429 on timedtext never aborts the video
             ydl.process_ie_result(info, download=True)
+            if langs:
+                segments = _download_subtitles_safely(
+                    ydl, info, work_dir, langs, cancel_event=cancel_event
+                )
+            if not segments and preferred_language != CaptionLanguage.AUTO and not preferred_langs:
+                # If translated track (e.g. tlang=hi) got 429 or was missing, fetch source video's native track
+                fallback_langs = [
+                    c for c in _select_caption_languages(info, CaptionLanguage.AUTO) if c not in langs
+                ]
+                if fallback_langs:
+                    segments = _download_subtitles_safely(
+                        ydl, info, work_dir, fallback_langs, cancel_event=cancel_event
+                    )
     except Exception as exc:
         raise RuntimeError(format_ytdlp_error(exc, platform)) from exc
 
@@ -680,5 +780,4 @@ def download_video_and_captions(
     if not video_path or not video_path.exists():
         raise FileNotFoundError("Downloaded video file could not be located.")
 
-    segments = _parse_downloaded_subtitles(work_dir, langs)
     return video_path, segments, info or {}, inspection

@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from app.caption_engine import (
+    _merge_indic_word_tokens,
     _words_match_requested_language,
     align_edited_text_to_words,
     devanagari_to_hinglish,
@@ -43,21 +44,28 @@ from app.models import (
     TranscriptSegment,
     WordTimestamp,
 )
-from app.moment_detector import analyze_audio_signal, compute_speech_keep_intervals, detect_best_moments
+from app.moment_detector import (
+    _find_pause_points,
+    analyze_audio_signal,
+    compute_speech_keep_intervals,
+    detect_best_moments,
+)
 from app.ollama_service import (
     check_lmstudio_status,
     enhance_social_hook_with_ollama,
     format_ai_label,
     parse_provider_and_model,
+    score_moments_with_local_ai,
     score_topic_relevance,
 )
 from app.pipeline import OUTPUT_DIR, job_manager
-from app.social_suggester import suggest_social_metadata
+from app.social_suggester import generate_best_hook_banner, suggest_social_metadata
 from app.video_renderer import _cam_source_crop, _pip_dimensions, detect_available_encoders, probe_video, render_clip
 from app.youtube_auth import cookies_to_netscape_text, find_chromium_browser
 from app.youtube_service import (
     _base_ydl_opts,
     _select_caption_languages,
+    download_video_and_captions,
     find_ffmpeg_dir,
     find_node_exe,
     format_ytdlp_error,
@@ -853,6 +861,338 @@ class TestNewFeaturesSuite(unittest.TestCase):
             # In out_top, upper half crops top of source (pure red -> R >> B); in out_bot, lower half has cam (pure red -> R >> B)
             self.assertGreater(int(f_top[200, 360, 2]), int(f_top[200, 360, 0]) + 100)
             self.assertGreater(int(f_bot[1050, 360, 2]), int(f_bot[1050, 360, 0]) + 100)
+
+    def test_improved_moment_detection_and_auto_best_hooks(self) -> None:
+        # 1. Best Hook Banner generation (strips music noise/fillers, distinct per clip, English/Hindi/Hinglish)
+        used: set[str] = set()
+        m1 = MomentCandidate(rank=1, start=12.0, end=42.0, duration=30.0, score=94.0, reasons=["Strong Opening Hook"])
+        m2 = MomentCandidate(rank=2, start=50.0, end=80.0, duration=30.0, score=88.0, reasons=["High Vocal Energy"])
+        m3 = MomentCandidate(rank=3, start=90.0, end=120.0, duration=30.0, score=83.0, reasons=["Top Dynamic Moment"])
+
+        h1 = generate_best_hook_banner(
+            clip_text="[♪♪♪] Yeah so um, why do 90% of creators miss this step? Let me break it down.",
+            video_title="Creator Growth Guide",
+            moment=m1,
+            caption_language=CaptionLanguage.ENGLISH,
+            used_hooks=used,
+        )
+        self.assertIn("90%", h1)
+        self.assertNotIn("♪", h1)
+        self.assertLessEqual(len(h1), 48)
+
+        # Identical music/empty text for clips 2 and 3 must still produce unique non-empty hooks
+        h2 = generate_best_hook_banner(
+            clip_text="[♪♪♪] ♪",
+            video_title="Pro Valorant Clutch",
+            moment=m2,
+            video_tags=["Valorant", "Gaming"],
+            caption_language=CaptionLanguage.ENGLISH,
+            used_hooks=used,
+        )
+        h3 = generate_best_hook_banner(
+            clip_text="",
+            video_title="Pro Valorant Clutch",
+            moment=m3,
+            video_tags=["Valorant", "Gaming"],
+            caption_language=CaptionLanguage.ENGLISH,
+            used_hooks=used,
+        )
+        self.assertTrue(h2 and h3)
+        self.assertNotEqual(h1.lower(), h2.lower())
+        self.assertNotEqual(h2.lower(), h3.lower())
+
+        # Hindi & Hinglish hooks + clean social title without musical notes
+        h_hi = generate_best_hook_banner(
+            clip_text="ये गलती कभी मत करना! असली सच सुनिए।",
+            video_title="Hindi Tips",
+            moment=m1,
+            caption_language=CaptionLanguage.HINDI,
+        )
+        self.assertIn("गलती", h_hi)
+
+        h_hing = generate_best_hook_banner(
+            clip_text="यह सबसे बड़ी गलती है! आखिर तक देखो।",
+            video_title="Hinglish Tips",
+            moment=m1,
+            caption_language=CaptionLanguage.HINGLISH,
+        )
+        self.assertIn("GALTI", h_hing)
+
+        clean_social = suggest_social_metadata(
+            clip_text="[♪♪♪] ♪ Why nobody talks about this secret? ♪ We're learning fast.",
+            video_title="Music Tutorial",
+            channel="WPM",
+            platform="YouTube",
+            moment=m1,
+        )
+        self.assertNotIn("♪", clean_social.title)
+        self.assertIn("?", clean_social.title)
+
+        # Long unpunctuated sentence still condenses into a crisp clip-specific hook banner
+        h_long = generate_best_hook_banner(
+            clip_text="Here is why nobody talks about this big secret in modern editing workflows today",
+            video_title="Editing Tips",
+            moment=m1,
+        )
+        self.assertIn("SECRET", h_long)
+        self.assertLessEqual(len(h_long), 46)
+
+        # 2. Moment detector skips leading sub-bass / [Music] intro & snaps intra-segment word boundaries
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            src = work / "intro_skip.mp4"
+            # 0..11s: low 80Hz bass rumble; 11..22s: 650Hz speech-band burst; 22..32s: quiet 120Hz hum
+            subprocess.run(
+                [
+                    _ffmpeg_exe(), "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=32",
+                    "-f", "lavfi", "-i",
+                    "aevalsrc='if(lt(t,11),0.65*sin(2*PI*80*t),if(lt(t,22),0.75*sin(2*PI*650*t),0.12*sin(2*PI*120*t)))':s=44100:d=32",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", str(src),
+                ],
+                check=True,
+            )
+            segs = [
+                TranscriptSegment(text="[♪♪♪] [Music]", start=0.0, end=10.5),
+                TranscriptSegment(
+                    text="Intro ended. Here's why 95% of channels fail early! Always hook viewers first.",
+                    start=11.0,
+                    end=21.8,
+                    has_word_timing=True,
+                    words=[
+                        WordTimestamp(word="Intro", start=11.0, end=11.4),
+                        WordTimestamp(word="ended.", start=11.4, end=11.9),
+                        WordTimestamp(word="Here's", start=12.1, end=12.5),
+                        WordTimestamp(word="why", start=12.5, end=12.8),
+                        WordTimestamp(word="95%", start=12.8, end=13.3),
+                        WordTimestamp(word="of", start=13.3, end=13.5),
+                        WordTimestamp(word="channels", start=13.5, end=14.1),
+                        WordTimestamp(word="fail", start=14.1, end=14.5),
+                        WordTimestamp(word="early!", start=14.5, end=15.0),
+                    ],
+                ),
+                TranscriptSegment(text="Subscribe for part two later.", start=23.0, end=30.0),
+            ]
+            moments, audio = detect_best_moments(
+                video_path=src,
+                duration=32.0,
+                num_clips=2,
+                target_duration=10,
+                segments=segs,
+            )
+            self.assertEqual(len(moments), 2)
+            self.assertGreaterEqual(moments[0].start, 9.5)
+            self.assertLessEqual(moments[0].start, 14.0)
+            self.assertIsNotNone(audio.speech_band_10hz)
+            self.assertGreater(float(audio.speech_band_10hz[150]), float(audio.speech_band_10hz[40]))
+            pauses = _find_pause_points(audio, segs, 32.0)
+            self.assertTrue(any(abs(p - 12.0) < 0.25 for p in pauses))
+
+        # 3. End-to-end prepended video hook + banner on multi-clip local job + update_clip preservation
+        import time as _time
+        import uuid
+
+        job_id = f"hook_{uuid.uuid4().hex[:6]}"
+        job_dir = OUTPUT_DIR / job_id
+        work_dir = job_dir / "_work"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        local_src = work_dir / "local_source.mp4"
+        try:
+            subprocess.run(
+                [
+                    _ffmpeg_exe(), "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=24:duration=28",
+                    "-f", "lavfi", "-i",
+                    "aevalsrc='if(between(t,7,11)+between(t,20,24),0.85*sin(2*PI*600*t),0.35*sin(2*PI*420*t))':s=44100:d=28",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", str(local_src),
+                ],
+                check=True,
+            )
+            req = ClipRequest(
+                url="https://example.com/local",
+                num_clips=2,
+                clip_duration=12,
+                highlighted_captions=False,
+                auto_hook=True,
+                hook_banner="",
+                keep_source=True,
+                use_source_cache=False,
+                encoder_mode=EncoderMode.CPU,
+            )
+            job_manager.submit_local_file_job(job_id=job_id, video_path=local_src, title="Viral Gaming Test", req=req)
+            deadline = _time.time() + 60.0
+            final = None
+            while _time.time() < deadline:
+                cur = job_manager.get_job(job_id)
+                if cur and cur.status in {"completed", "failed", "cancelled"}:
+                    final = cur
+                    break
+                _time.sleep(0.25)
+
+            self.assertIsNotNone(final)
+            self.assertEqual(final.status, "completed", msg=str(final.error))
+            self.assertEqual(len(final.clips), 2)
+            self.assertTrue(final.clips[0].hook_banner)
+            self.assertTrue(final.clips[1].hook_banner)
+            self.assertNotEqual(final.clips[0].hook_banner.lower(), final.clips[1].hook_banner.lower())
+            # Verify a tiny video+audio hook clip was physically prepended before each generated clip
+            self.assertIsNotNone(final.clips[0].hook_start)
+            self.assertIsNotNone(final.clips[0].hook_end)
+            self.assertIsNotNone(final.clips[1].hook_start)
+            self.assertIsNotNone(final.clips[1].hook_end)
+            c1_info = probe_video(job_dir / final.clips[0].filename)
+            self.assertGreater(c1_info.duration, (final.clips[0].end - final.clips[0].start) + 1.2)
+
+            # Updating hook_banner alone preserves prepended video hook; trimming preserves auto hook_banner
+            orig_hook = final.clips[0].hook_banner
+            kept_vid_hook = job_manager.update_clip(
+                job_id=job_id,
+                rank=1,
+                patch=ClipUpdateRequest(hook_banner="CUSTOM EDITED HOOK!"),
+            )
+            self.assertEqual(kept_vid_hook.hook_banner, "CUSTOM EDITED HOOK!")
+            self.assertEqual(kept_vid_hook.hook_start, final.clips[0].hook_start)
+
+            trimmed = job_manager.update_clip(
+                job_id=job_id,
+                rank=1,
+                patch=ClipUpdateRequest(start=final.clips[0].start, end=min(28.0, final.clips[0].start + 6.0)),
+            )
+            self.assertEqual(trimmed.hook_banner, "CUSTOM EDITED HOOK!")
+            self.assertTrue(orig_hook)
+        finally:
+            delete_job_output(job_id)
+
+        # 4. Local AI general viral scoring (empty topic) + hook_banner extraction check
+        self.assertEqual(score_moments_with_local_ai("", [{"preview": "hello"}]), {})
+
+    def test_hindi_captions_translation_and_upload_kit(self) -> None:
+        from unittest.mock import patch
+
+        # 1. Split Devanagari combining matra tokens merge cleanly onto base word
+        merged = _merge_indic_word_tokens(
+            [
+                WordTimestamp(word="नमस", start=0.0, end=0.2),
+                WordTimestamp(word="्ते", start=0.2, end=0.4),
+                WordTimestamp(word="दोस", start=0.4, end=0.6),
+                WordTimestamp(word="्तों!", start=0.6, end=0.9),
+            ]
+        )
+        self.assertEqual([w.word for w in merged], ["नमस्ते", "दोस्तों!"])
+
+        # 2. English YouTube segments cleanly translate to Hindi captions when CaptionLanguage.HINDI is picked
+        en_segs = [
+            TranscriptSegment(
+                text="Why do 90% of players miss this secret?",
+                start=0.5,
+                end=4.0,
+                has_word_timing=True,
+                words=[
+                    WordTimestamp(word="Why", start=0.5, end=0.9),
+                    WordTimestamp(word="do", start=0.9, end=1.2),
+                    WordTimestamp(word="90%", start=1.2, end=1.8),
+                    WordTimestamp(word="of", start=1.8, end=2.0),
+                    WordTimestamp(word="players", start=2.0, end=2.6),
+                    WordTimestamp(word="miss", start=2.6, end=3.1),
+                    WordTimestamp(word="this", start=3.1, end=3.5),
+                    WordTimestamp(word="secret?", start=3.5, end=4.0),
+                ],
+            )
+        ]
+        with patch("app.caption_engine.translate_phrases_to_hindi", return_value=["90% खिलाड़ी यह राज़ क्यों चूक जाते हैं?"]):
+            hi_words, cap_src, ai_flag = get_clip_words(
+                video_path=Path("unused.mp4"),
+                segments=en_segs,
+                clip_start=0.0,
+                clip_end=5.0,
+                audio=None,
+                mode=CaptionEngineMode.AUTO,
+                work_dir=Path("."),
+                rank=1,
+                caption_language=CaptionLanguage.HINDI,
+            )
+        self.assertFalse(ai_flag)
+        self.assertEqual(cap_src, "youtube_word_sync")
+        self.assertTrue(_words_match_requested_language(hi_words, CaptionLanguage.HINDI))
+
+        # 3. Hindi Upload Copy Kit preserves Devanagari keywords/hashtags and renders Hindi CTA
+        moment = MomentCandidate(rank=1, start=0.0, end=15.0, duration=15.0, score=93.0, reasons=["Strong Opening Hook"])
+        social = suggest_social_metadata(
+            clip_text="90% खिलाड़ी यह बड़ी गलती क्यों करते हैं? असली तरीका आज सीखें।",
+            video_title="गेमिंग गाइड हिंदी",
+            channel="WPM Gaming",
+            platform="YouTube",
+            moment=moment,
+            video_tags=["गेमिंग", "टिप्स"],
+            caption_language=CaptionLanguage.HINDI,
+        )
+        self.assertIn("गलती", social.title)
+        self.assertIn("#गेमिंग", social.hashtags)
+        self.assertIn("#Hindi", social.hashtags)
+        self.assertIn("कमेंट में अपनी राय", social.facebook_caption)
+
+    def test_subtitle_429_does_not_abort_video_download(self) -> None:
+        from unittest.mock import patch
+
+        class _MockYDL:
+            def __init__(self, opts):
+                self.params = dict(opts)
+                self._progress_hooks = list(opts.get("progress_hooks") or [])
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def extract_info(self, url, download=False):
+                return {
+                    "id": "vid429",
+                    "title": "Hindi Rate Limit Test",
+                    "uploader": "WPM",
+                    "duration": 30.0,
+                    "language": "en",
+                    "subtitles": {},
+                    "automatic_captions": {
+                        "hi": [{"ext": "json3", "url": "https://example.com/timedtext_hi"}],
+                        "en": [{"ext": "json3", "url": "https://example.com/timedtext_en"}],
+                    },
+                }
+
+            def process_ie_result(self, info, download=True):
+                # Must not require subtitles during video pass
+                assert not self.params.get("writesubtitles")
+                assert not self.params.get("writeautomaticsub")
+                outtmpl = self.params["outtmpl"]
+                Path(outtmpl.replace("%(ext)s", "mp4")).write_bytes(b"fake_mp4_bytes")
+                return info
+
+            def process_subtitles(self, video_id, manual, auto):
+                lang = (self.params.get("subtitleslangs") or ["en"])[0]
+                return {lang: {"ext": "json3", "url": f"https://example.com/timedtext_{lang}"}}
+
+            def dl(self, dest, sub_info, subtitle=False):
+                if "_hi" in sub_info["url"]:
+                    raise RuntimeError("HTTP Error 429: Too Many Requests")
+                Path(dest).write_text(
+                    json.dumps({"events": [{"tStartMs": 500, "dDurationMs": 2000, "segs": [{"utf8": "Watch this!"}]}]}),
+                    encoding="utf-8",
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            with patch("app.youtube_service.yt_dlp.YoutubeDL", _MockYDL), patch("app.youtube_service.time.sleep"):
+                vpath, segs, _, insp = download_video_and_captions(
+                    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    work_dir=work,
+                    preferred_language=CaptionLanguage.HINDI,
+                )
+            self.assertTrue(vpath.exists())
+            self.assertEqual(len(segs), 1)
+            self.assertEqual(segs[0].text, "Watch this!")
+            self.assertEqual(insp.video_id, "vid429")
 
 
 if __name__ == "__main__":

@@ -446,7 +446,8 @@ body {
   color: var(--accent);
 }
 
-.caption-bar {
+.caption-bar,
+.hook-bar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1555,7 +1556,8 @@ body {
   border-color: var(--accent-2);
 }
 
-.clip-edit-panel textarea {
+.clip-edit-panel textarea,
+.clip-edit-panel input[type="text"] {
   width: 100%;
   background: var(--surface);
   color: var(--text);
@@ -1565,6 +1567,20 @@ body {
   font-size: 0.76rem;
   font-family: inherit;
   resize: vertical;
+}
+
+.clip-hook-pill {
+  font-size: 0.75rem;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(255, 230, 0, 0.1);
+  border: 1px solid rgba(255, 230, 0, 0.28);
+  color: #fef08a;
+  word-break: break-word;
+}
+
+.clip-hook-pill strong {
+  color: var(--accent);
 }
 
 .clip-edit-actions {
