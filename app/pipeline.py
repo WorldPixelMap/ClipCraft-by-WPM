@@ -48,7 +48,7 @@ from app.moment_detector import (
     detect_best_moments,
 )
 from app.ollama_service import enhance_social_hook_with_ollama, format_ai_label
-from app.social_suggester import suggest_social_metadata
+from app.social_suggester import build_platform_captions, suggest_social_metadata
 from app.video_renderer import probe_video, render_clip, target_dimensions
 from app.youtube_service import (
     VideoInspection,
@@ -193,6 +193,9 @@ def _save_cached_source(
             "heatmap": inspection.heatmap,
             "caption_languages": inspection.caption_languages,
             "tags": inspection.tags,
+            "channel_handle": inspection.channel_handle,
+            "channel_url": inspection.channel_url,
+            "source_url": inspection.source_url,
         },
         "segments": [s.model_dump() for s in segments],
     }
@@ -214,8 +217,11 @@ def _apply_ollama_social_polish(
     caption_language: CaptionLanguage,
     ollama_model: str,
     ai_provider: str = "auto",
+    channel_handle: str = "",
+    channel_url: str = "",
+    source_url: str = "",
 ):
-    """Optionally refine social title and hook caption via local Ollama/LM Studio while preserving hashtags."""
+    """Optionally refine social title and hook caption via local Ollama/LM Studio while preserving creator credit & hashtags."""
     polished = enhance_social_hook_with_ollama(
         model=ollama_model,
         clip_text=clip_text,
@@ -228,28 +234,23 @@ def _apply_ollama_social_polish(
         return social
     title = polished["title"] or social.title
     hook_cap = polished.get("hook_caption") or ""
-    hashtag_line = " ".join(social.hashtags)
-    reason_line = " • ".join(moment.reasons[:2]) if moment.reasons else "Top Highlight"
-
-    yt_caption = (
-        f"{title}\n\n"
-        + (f"{hook_cap}\n\n" if hook_cap else "")
-        + f"Source: {video_title} ({channel})\n"
-        + f"Moment signal: {reason_line}\n\n"
-        + f"{hashtag_line}"
-    )
-    fb_caption = (
-        f"{title} 👇🔥\n\n"
-        + (f"{hook_cap}\n\n" if hook_cap else "")
-        + f"Drop your thoughts in the comments! Follow for more {platform} highlights.\n"
-        + f"Credit: {channel}\n\n"
-        + f"{hashtag_line}"
+    yt_caption, fb_caption, copy_yt, copy_fb = build_platform_captions(
+        title=title,
+        body_block=hook_cap,
+        video_title=video_title,
+        channel=channel,
+        platform=platform,
+        moment=moment,
+        hashtags=social.hashtags,
+        channel_handle=channel_handle,
+        channel_url=channel_url,
+        source_url=source_url,
     )
     social.title = title
     social.youtube_caption = yt_caption
     social.facebook_caption = fb_caption
-    social.copy_all_youtube = f"Title:\n{title}\n\nDescription & Hashtags:\n{yt_caption}"
-    social.copy_all_facebook = f"Title:\n{title}\n\nPost Caption & Hashtags:\n{fb_caption}"
+    social.copy_all_youtube = copy_yt
+    social.copy_all_facebook = copy_fb
     return social
 
 
@@ -1055,6 +1056,9 @@ class JobManager:
                 moment=m,
                 video_tags=inspection.tags,
                 caption_language=req.caption_language,
+                channel_handle=inspection.channel_handle,
+                channel_url=inspection.channel_url,
+                source_url=inspection.source_url or (req.url if "example.com/local" not in req.url else ""),
             )
             if ollama_model:
                 social = _apply_ollama_social_polish(
@@ -1067,6 +1071,9 @@ class JobManager:
                     caption_language=req.caption_language,
                     ollama_model=ollama_model,
                     ai_provider=req.ai_provider.value,
+                    channel_handle=inspection.channel_handle,
+                    channel_url=inspection.channel_url,
+                    source_url=inspection.source_url or (req.url if "example.com/local" not in req.url else ""),
                 )
 
             social_dump_lines.extend(

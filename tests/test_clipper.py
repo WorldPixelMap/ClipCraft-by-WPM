@@ -216,11 +216,18 @@ class TestHindiHinglishAndSocial(unittest.TestCase):
             moment=moment,
             video_tags=["Valorant", "Gaming", "Clutch"],
             caption_language=CaptionLanguage.HINGLISH,
+            channel_handle="@wpmgaming",
+            channel_url="https://www.twitch.tv/wpmgaming",
+            source_url="https://www.twitch.tv/videos/123456789",
         )
         self.assertTrue(len(social.title) <= 72)
         self.assertIn("?", social.title)
         self.assertIn("#Twitch", social.hashtags)
         self.assertIn("#Hinglish", social.hashtags)
+        self.assertIn("Credit: WPM Gaming (@wpmgaming)", social.youtube_caption)
+        self.assertIn("Credit: WPM Gaming (@wpmgaming)", social.facebook_caption)
+        self.assertIn("https://www.twitch.tv/videos/123456789", social.youtube_caption)
+        self.assertIn("https://www.twitch.tv/videos/123456789", social.facebook_caption)
         self.assertIn("Title:", social.copy_all_youtube)
         self.assertIn("Title:", social.copy_all_facebook)
 

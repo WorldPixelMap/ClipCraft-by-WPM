@@ -25,18 +25,31 @@
   - **Audio Energy & Speech Peaks** (loud reactions, excitement, laughter)
   - **Smart Hook Detection** (questions, exclamations, catchy lines)
   - **Clean Pause Cutting** (never cuts off mid-word!)
-- **Word-by-Word Highlighted Captions**:
-  - Uses existing YouTube captions first (**0% AI!**), or falls back to an **inbuilt tiny offline speech model** (`faster-whisper-tiny`, CPU-friendly) only when a video has no captions.
-  - Supports **Auto**, **English**, **Hindi (`हिंदी`)**, and **Hinglish**!
-- **Universal Real-Human Streamer Cam Frame (PiP)**:
+  - **Manual Start/End Range & Single-Clip Trim/Re-render** (`mm:ss` or `±1s` nudges to adjust boundaries on individual clips without re-running the whole video)
+  - **Dead-Air Jump-Cut Mode**: Optionally strips long silent pauses (`> 0.65s`) automatically while keeping word captions frame-accurate
+- **Word-by-Word Highlighted Captions & Inline Editor**:
+  - Uses existing platform captions first (**0% AI!**), or falls back to an **inbuilt tiny offline speech model** (`faster-whisper-tiny`, CPU-friendly) with automatic translation/language matching when a video lacks matching captions.
+  - Strict support for **Auto**, **English**, **Hindi (`हिंदी`)**, and **Hinglish**!
+  - Customize **Caption Style** (`Classic Outline`, `Boxed Pill`, `Pop 1–2 Words`, `Clean Minimal`), **Position** (`Bottom`, `Center`, `Top`), **Font Size**, **Highlight Color**, optional **4s Top Hook Banner**, and **`@Watermark`**.
+  - **Inline Word Editor**: Fix typos or Hinglish/Hindi spellings directly on any generated clip card and click **Re-burn Clip**.
+- **Universal Real-Human Streamer Cam Frame & 50/50 Split-Screen**:
   - Automatically finds the **real human streamer face anywhere in the source video** (top/bottom corners, top-center, bottom-center, mid-left/mid-right edges, center, or floating cams — while filtering out in-game NPCs and static posters!).
-  - Smoothly tracks their head and fits them cleanly edge-to-edge into your Cam Frame corner with **no blurry dead bars**, keeps gameplay centered, and automatically hides the Cam Frame during cutscenes.
-- **Works With 1,000+ Sites & Local Videos**:
-  - Paste links from **YouTube**, **Twitch**, **Kick**, **Facebook**, **X / Twitter**, **Instagram**, **TikTok**, **Vimeo**, **Rumble**, or upload a **Local Video** directly from your PC.
+  - Supports **9:16 Shorts**, **9:16 Blur**, **16:9 Wide**, and **Split 50/50** (let you choose **Up Part / Top 50%** or **Down Part / Bottom 50%** for the streamer face, with live visual diagram preview!).
+  - Smoothly tracks faces edge-to-edge with **no blurry dead bars** and hides the PiP Cam Frame during cutscenes.
+- **Hardware GPU Acceleration, Music Ducking & Safe-Zone Preview**:
+  - Auto-probes **NVIDIA NVENC**, **Intel Quick Sync (QSV)**, and **AMD AMF** GPU encoders for faster exports with automatic **CPU `libx264`** fallback.
+  - Upload an optional **Background Music** track (`.mp3` / `.wav` / `.m4a`) with **auto-ducking** so music dips automatically when someone speaks, plus **Voice Loudness Boost**.
+  - Toggle **Shorts / Reels / TikTok Safe-Zone Guides** directly over clip previews to verify captions and watermarks aren't covered by platform UI icons.
+- **Works With 1,000+ Sites, Batch Queue & Source Caching**:
+  - Paste single links or **Batch Queue** multiple URLs from **YouTube**, **Twitch**, **Kick**, **Facebook**, **X / Twitter**, **Instagram**, **TikTok**, **Vimeo**, **Rumble**, or upload a **Local Video** directly from your PC.
+  - **Cancel** running/queued jobs anytime, **Delete** old exports from **Recent Local Exports**, optionally **Keep Downloaded Source** inside the job folder, or **Reuse Source Cache** (with per-language subtitle caching) for instant re-clips & trims.
+  - Save and switch **Creator Studio Presets** in one click.
+- **Optional Local AI Boost (Ollama & LM Studio — Strictly Opt-In)**:
+  - Keep **100% Zero AI** by default, or enable local **Ollama** (`127.0.0.1:11434`) or **LM Studio** (`127.0.0.1:1234`) for topic-based moment search (`"find moments about..."`) and viral hook/caption polish.
 - **Pre-Edited Reel Captioner**:
   - Already edited your reel? Upload it in the **Caption Your Pre-Edited Reel** section to burn highlighted captions onto the full video without slicing it (supports offline transcription or your own pasted script / `.SRT`!).
-- **Ready-to-Post Upload Copy Kit**:
-  - Generates a **Title**, **YouTube Shorts / Facebook Reels Caption**, and **Hashtags** for every single clip with 1-click **Copy** buttons and **Download All (.ZIP)**.
+- **Ready-to-Post Upload Copy Kit (With Creator Credit)**:
+  - Generates a **Title**, **YouTube Shorts / Facebook Reels Caption** (automatically including **source creator credit**, `@handle` / channel link, and original video link), and **Hashtags** for every single clip with 1-click **Copy** buttons and **Download All (.ZIP)**.
 
 ---
 
@@ -166,7 +179,8 @@ You do **not** always need to sign in — many videos work immediately without l
 │   ├── caption_engine.py   # Word-sync engine, Hinglish transliterator & ASS karaoke builder
 │   ├── face_tracker.py     # Offline CPU YuNet real-human face tracker & box detector
 │   ├── video_renderer.py   # FFmpeg reframer, edge-to-edge Cam Frame PiP & caption burner
-│   ├── social_suggester.py # Zero-AI Title, Caption & Hashtag generator
+│   ├── social_suggester.py # Zero-AI Title, Caption (with Creator Credit) & Hashtag generator
+│   ├── ollama_service.py   # Strictly optional local Ollama & LM Studio client
 │   └── models.py           # Pydantic request/response schemas
 ├── static/
 │   ├── index.html          # Offline-ready dark creator studio UI

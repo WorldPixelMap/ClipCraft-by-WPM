@@ -258,6 +258,9 @@ class VideoInspection:
     heatmap: list[dict[str, float]]
     caption_languages: list[str]
     tags: list[str] = field(default_factory=list)
+    channel_handle: str = ""
+    channel_url: str = ""
+    source_url: str = ""
 
 
 def _build_inspection_from_info(
@@ -290,6 +293,10 @@ def _build_inspection_from_info(
 
     langs = _select_caption_languages(info, preferred_language)
     tags = [str(t) for t in (info.get("tags") or []) if t][:15]
+    raw_handle = str(info.get("uploader_id") or "").strip()
+    channel_handle = raw_handle if raw_handle.startswith("@") else ""
+    channel_url = str(info.get("channel_url") or info.get("uploader_url") or "").strip()
+    source_url = str(info.get("webpage_url") or info.get("original_url") or "").strip()
     return VideoInspection(
         video_id=str(info.get("id") or "video"),
         platform=platform,
@@ -300,6 +307,9 @@ def _build_inspection_from_info(
         heatmap=heatmap,
         caption_languages=langs,
         tags=tags,
+        channel_handle=channel_handle,
+        channel_url=channel_url,
+        source_url=source_url,
     )
 
 

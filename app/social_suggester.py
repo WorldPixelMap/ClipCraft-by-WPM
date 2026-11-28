@@ -87,6 +87,70 @@ def _pick_hook_title(
     return chosen[0].upper() + chosen[1:] if len(chosen) > 1 else chosen
 
 
+def build_platform_captions(
+    title: str,
+    body_block: str,
+    video_title: str,
+    channel: str,
+    platform: str,
+    moment: MomentCandidate,
+    hashtags: list[str],
+    channel_handle: str = "",
+    channel_url: str = "",
+    source_url: str = "",
+) -> tuple[str, str, str, str]:
+    """Assemble YouTube and Facebook captions with explicit source video creator credit."""
+    hashtag_line = " ".join(hashtags)
+    reason_line = " • ".join(moment.reasons[:2]) if moment.reasons else "Top Highlight"
+
+    creator_name = (channel or "").strip() or "Original Creator"
+    handle = (channel_handle or "").strip()
+    if handle and handle.lower() not in creator_name.lower():
+        creator_credit = f"{creator_name} ({handle})"
+    else:
+        creator_credit = creator_name
+
+    clean_chan_url = (channel_url or "").strip()
+    credit_line = (
+        f"Credit: {creator_credit} — {clean_chan_url}"
+        if clean_chan_url.startswith(("http://", "https://"))
+        else f"Credit: {creator_credit}"
+    )
+
+    clean_src_url = (source_url or "").strip()
+    has_public_src = clean_src_url.startswith(("http://", "https://")) and "example.com/local" not in clean_src_url
+    source_line = f"Original Video: {video_title} ({platform})"
+    if has_public_src:
+        source_line += f"\nWatch Full Video: {clean_src_url}"
+
+    body_part = f"{body_block.strip()}\n\n" if body_block.strip() else ""
+
+    yt_caption = (
+        f"{title}\n\n"
+        f"{body_part}"
+        f"{credit_line}\n"
+        f"{source_line}\n"
+        f"Moment signal: {reason_line}\n\n"
+        f"{hashtag_line}"
+    )
+
+    fb_caption = (
+        f"{title} 👇🔥\n\n"
+        f"{body_part}"
+        f"Drop your thoughts in the comments! Follow for more {platform} highlights.\n\n"
+        f"{credit_line}\n"
+        f"{source_line}\n\n"
+        f"{hashtag_line}"
+    )
+
+    return (
+        yt_caption,
+        fb_caption,
+        f"Title:\n{title}\n\nDescription & Hashtags:\n{yt_caption}",
+        f"Title:\n{title}\n\nPost Caption & Hashtags:\n{fb_caption}",
+    )
+
+
 def suggest_social_metadata(
     clip_text: str,
     video_title: str,
@@ -95,8 +159,11 @@ def suggest_social_metadata(
     moment: MomentCandidate,
     video_tags: list[str] | None = None,
     caption_language: CaptionLanguage = CaptionLanguage.AUTO,
+    channel_handle: str = "",
+    channel_url: str = "",
+    source_url: str = "",
 ) -> SocialSuggestion:
-    """Generate copy-paste ready Title, YouTube/Facebook Captions, and Hashtags without AI."""
+    """Generate copy-paste ready Title, YouTube/Facebook Captions with creator credit, and Hashtags without AI."""
     video_tags = video_tags or []
     title = _pick_hook_title(clip_text, video_title, moment, platform)
     keywords = _extract_keywords(clip_text, video_title, video_tags, limit=5)
@@ -133,28 +200,22 @@ def suggest_social_metadata(
         if len(hashtags) >= 10:
             break
 
-    hashtag_line = " ".join(hashtags)
     snippet = re.sub(r"\s+", " ", clip_text).strip()
     if len(snippet) > 140:
         snippet = snippet[:137].rsplit(" ", 1)[0] + "..."
+    quote_part = f'"{snippet}"' if snippet else ""
 
-    quote_part = f'"{snippet}"\n\n' if snippet else ""
-    reason_line = " • ".join(moment.reasons[:2]) if moment.reasons else "Top Highlight"
-
-    yt_caption = (
-        f"{title}\n\n"
-        f"{quote_part}"
-        f"Source: {video_title} ({channel})\n"
-        f"Moment signal: {reason_line}\n\n"
-        f"{hashtag_line}"
-    )
-
-    fb_caption = (
-        f"{title} 👇🔥\n\n"
-        f"{quote_part}"
-        f"Drop your thoughts in the comments! Follow for more {platform} highlights.\n"
-        f"Credit: {channel}\n\n"
-        f"{hashtag_line}"
+    yt_caption, fb_caption, copy_yt, copy_fb = build_platform_captions(
+        title=title,
+        body_block=quote_part,
+        video_title=video_title,
+        channel=channel,
+        platform=platform,
+        moment=moment,
+        hashtags=hashtags,
+        channel_handle=channel_handle,
+        channel_url=channel_url,
+        source_url=source_url,
     )
 
     return SocialSuggestion(
@@ -162,6 +223,6 @@ def suggest_social_metadata(
         youtube_caption=yt_caption,
         facebook_caption=fb_caption,
         hashtags=hashtags,
-        copy_all_youtube=f"Title:\n{title}\n\nDescription & Hashtags:\n{yt_caption}",
-        copy_all_facebook=f"Title:\n{title}\n\nPost Caption & Hashtags:\n{fb_caption}",
+        copy_all_youtube=copy_yt,
+        copy_all_facebook=copy_fb,
     )
