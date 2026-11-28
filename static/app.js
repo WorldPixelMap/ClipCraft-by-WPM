@@ -87,11 +87,15 @@ function showError(msg) {
 function updateCookiesBadge(loaded) {
   const badge = $("cookiesBadge");
   const clearBtn = $("clearCookiesBtn");
+  const loginOptBtn = $("ytLoginOptBtn");
   const pill = $("ytLoginPill");
   const pillText = $("ytLoginPillText");
   if (badge) {
-    badge.textContent = loaded ? "(YouTube Signed In)" : "(Not Signed In)";
+    badge.textContent = loaded ? "YouTube Signed In" : "Not Signed In";
     badge.classList.toggle("loaded", Boolean(loaded));
+  }
+  if (loginOptBtn) {
+    loginOptBtn.textContent = loaded ? "Switch Account" : "Sign in to YouTube";
   }
   if (clearBtn) clearBtn.classList.toggle("hidden", !loaded);
   if (pill && pillText) {
@@ -629,6 +633,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("pasteCookiesToggleBtn").addEventListener("click", () => {
     $("cookiesPasteBox").classList.toggle("hidden");
   });
+
+  if ($("cancelPasteCookiesBtn")) {
+    $("cancelPasteCookiesBtn").addEventListener("click", () => {
+      $("cookiesPasteBox").classList.add("hidden");
+    });
+  }
 
   $("saveCookiesTextBtn").addEventListener("click", async () => {
     clearError();

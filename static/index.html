@@ -6,7 +6,7 @@
   <title>Local ClipCraft by WPM — Offline-First Stream &amp; Video Clipper</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="shortcut icon" type="image/png" href="/favicon.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=3.3" />
+  <link rel="stylesheet" href="/static/styles.css?v=3.5" />
 </head>
 <body>
   <div class="app-shell">
@@ -178,65 +178,117 @@
 
           <!-- Collapsible Studio, Auth & Minimal PC Options -->
           <details class="advanced-drawer" id="advancedDrawer">
-            <summary>Engine, YouTube Cookies, Audio Boost &amp; Watermark Options</summary>
-            <div class="advanced-grid">
-              <div class="adv-field">
-                <label for="captionModeSelect">Caption Engine</label>
-                <select id="captionModeSelect">
-                  <option value="auto" selected>Auto (Zero-AI captions first, Offline Tiny fallback)</option>
-                  <option value="no_ai">Strict Zero-AI Only (Platform + Audio Pacing)</option>
-                  <option value="offline">Inbuilt Offline Whisper-Tiny (Best Word Sync)</option>
-                </select>
-              </div>
-              <div class="adv-field">
-                <label for="clipDurSelect">Target Clip Length</label>
-                <select id="clipDurSelect">
-                  <option value="20">Short (~20s)</option>
-                  <option value="35" selected>Standard (~35s)</option>
-                  <option value="55">Extended (~55s)</option>
-                </select>
-              </div>
-              <div class="adv-field">
-                <label for="qualitySelect">Render Resolution</label>
-                <select id="qualitySelect">
-                  <option value="720p" selected>720p (Fast / Minimal PC)</option>
-                  <option value="1080p">1080p HD</option>
-                </select>
-              </div>
-              <div class="adv-field">
-                <label for="watermarkInput">Channel Watermark (Optional)</label>
-                <input type="text" id="watermarkInput" maxlength="32" placeholder="@YourHandle" />
-              </div>
-              <div class="adv-field">
-                <label for="cookiesBrowserSelect">Browser Cookies (YouTube Sign-In)</label>
-                <select id="cookiesBrowserSelect">
-                  <option value="" selected>None (Public / cookies.txt if loaded)</option>
-                  <option value="firefox">Firefox (recommended — works while open)</option>
-                  <option value="edge">Edge (close all Edge windows first)</option>
-                  <option value="chrome">Chrome (close all Chrome windows first)</option>
-                  <option value="brave">Brave (close all Brave windows first)</option>
-                </select>
-              </div>
-              <div class="adv-field">
-                <label>YouTube Account / Cookies <span id="cookiesBadge" class="mini-status">(Not Signed In)</span></label>
-                <div class="cookies-btn-row">
-                  <button type="button" class="btn-secondary btn-xs" id="ytLoginOptBtn">Sign in to YouTube</button>
-                  <button type="button" class="btn-ghost btn-xs" id="uploadCookiesBtn">Load cookies.txt</button>
-                  <button type="button" class="btn-ghost btn-xs" id="pasteCookiesToggleBtn">Paste</button>
-                  <button type="button" class="btn-ghost btn-xs hidden" id="clearCookiesBtn">Sign Out</button>
-                  <input type="file" id="cookiesFileInput" accept=".txt" class="hidden" />
+            <summary>
+              <svg class="drawer-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+              <span>Advanced Output, Audio &amp; YouTube Sign-In Options</span>
+            </summary>
+
+            <div class="adv-sections">
+              <!-- Panel 1: Processing, Quality & Audio -->
+              <div class="adv-panel">
+                <div class="adv-panel-head">
+                  <span class="control-label adv-panel-title">Processing &amp; Output Settings</span>
                 </div>
-                <div class="cookies-paste-box hidden" id="cookiesPasteBox">
-                  <textarea id="cookiesTextInput" rows="3" placeholder="Paste Netscape cookies.txt content here..."></textarea>
-                  <button type="button" class="btn-secondary btn-xs" id="saveCookiesTextBtn">Save Cookies</button>
+                <div class="adv-settings-grid">
+                  <div class="adv-field">
+                    <label for="captionModeSelect">Caption Engine</label>
+                    <select id="captionModeSelect">
+                      <option value="auto" selected>Auto (Zero-AI first, Offline fallback)</option>
+                      <option value="no_ai">Strict Zero-AI Only (Platform + Audio)</option>
+                      <option value="offline">Offline Whisper-Tiny (Best Word Sync)</option>
+                    </select>
+                  </div>
+                  <div class="adv-field">
+                    <label for="clipDurSelect">Target Clip Length</label>
+                    <select id="clipDurSelect">
+                      <option value="20">Short (~20s)</option>
+                      <option value="35" selected>Standard (~35s)</option>
+                      <option value="55">Extended (~55s)</option>
+                    </select>
+                  </div>
+                  <div class="adv-field">
+                    <label for="qualitySelect">Render Resolution</label>
+                    <select id="qualitySelect">
+                      <option value="720p" selected>720p (Fast / Minimal PC)</option>
+                      <option value="1080p">1080p Full HD</option>
+                    </select>
+                  </div>
+                  <div class="adv-field">
+                    <label for="watermarkInput">Channel Watermark (Optional)</label>
+                    <input type="text" id="watermarkInput" maxlength="32" placeholder="@YourHandle" />
+                  </div>
                 </div>
-                <div class="cookies-help">Click <strong>Sign in to YouTube</strong> to log in via a popup window (saves session locally for <code>yt-dlp</code>).</div>
+
+                <div class="adv-switch-row">
+                  <label class="adv-switch-info" for="audioBoostToggle">
+                    <span class="adv-switch-title">Voice Loudness Boost</span>
+                    <span class="adv-switch-desc">Applies fast 1-pass loudness normalization for clearer, punchier speech.</span>
+                  </label>
+                  <label class="switch" aria-label="Voice Loudness Boost">
+                    <input type="checkbox" id="audioBoostToggle" checked />
+                    <span class="slider"></span>
+                  </label>
+                </div>
               </div>
-              <div class="adv-field adv-check-wrap">
-                <label class="check-label">
-                  <input type="checkbox" id="audioBoostToggle" checked />
-                  <span>Voice Loudness Boost (Fast 1-pass punchy audio)</span>
-                </label>
+
+              <!-- Panel 2: YouTube Authentication & Cookies -->
+              <div class="adv-panel">
+                <div class="auth-header">
+                  <div>
+                    <span class="control-label adv-panel-title">YouTube Authentication</span>
+                    <p class="auth-desc">Optional — needed only when YouTube requests sign-in, age, or bot verification.</p>
+                  </div>
+                  <span id="cookiesBadge" class="auth-status-pill">Not Signed In</span>
+                </div>
+
+                <div class="auth-columns">
+                  <div class="auth-col">
+                    <div class="auth-col-title">
+                      Interactive Sign-In
+                      <span class="auth-rec-tag">Recommended</span>
+                    </div>
+                    <p class="auth-col-desc">Opens a local sign-in window and stores your session securely on this PC.</p>
+                    <div class="auth-btn-group">
+                      <button type="button" class="btn-secondary btn-xs" id="ytLoginOptBtn">Sign in to YouTube</button>
+                      <button type="button" class="btn-ghost-danger btn-xs hidden" id="clearCookiesBtn">Sign Out</button>
+                    </div>
+                  </div>
+
+                  <div class="auth-col auth-col-divider">
+                    <div class="auth-col-title">Browser Profile or Cookies File</div>
+                    <div class="auth-import-stack">
+                      <div class="adv-field">
+                        <label for="cookiesBrowserSelect">Read Session From Local Browser</label>
+                        <select id="cookiesBrowserSelect">
+                          <option value="" selected>None (Public / Saved Session)</option>
+                          <option value="firefox">Firefox (Recommended — works while open)</option>
+                          <option value="edge">Microsoft Edge (Close Edge windows first)</option>
+                          <option value="chrome">Google Chrome (Close Chrome windows first)</option>
+                          <option value="brave">Brave (Close Brave windows first)</option>
+                        </select>
+                      </div>
+
+                      <div class="auth-cookies-row">
+                        <span class="mini-label">Import Netscape <code>cookies.txt</code></span>
+                        <div class="cookies-btn-row">
+                          <button type="button" class="btn-secondary btn-xs" id="uploadCookiesBtn">Upload .txt</button>
+                          <button type="button" class="btn-ghost btn-xs" id="pasteCookiesToggleBtn">Paste Text</button>
+                          <input type="file" id="cookiesFileInput" accept=".txt" class="hidden" />
+                        </div>
+                      </div>
+
+                      <div class="cookies-paste-box hidden" id="cookiesPasteBox">
+                        <textarea id="cookiesTextInput" rows="3" placeholder="Paste Netscape cookies.txt content here..."></textarea>
+                        <div class="cookies-paste-actions">
+                          <button type="button" class="btn-secondary btn-xs" id="saveCookiesTextBtn">Save Cookies</button>
+                          <button type="button" class="btn-ghost btn-xs" id="cancelPasteCookiesBtn">Cancel</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </details>
@@ -450,6 +502,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=3.4"></script>
+  <script src="/static/app.js?v=3.5"></script>
 </body>
 </html>
