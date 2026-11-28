@@ -150,6 +150,8 @@ def _load_cached_source(
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         insp = VideoInspection(**meta["inspection"])
+        if insp.is_live:
+            return None
         lang_key = caption_language.value
         subs_file = cdir / f"subs_{lang_key}.json"
         segs: list[TranscriptSegment] = []
@@ -541,15 +543,21 @@ class JobManager:
                         video_id=insp.video_id,
                         duration=insp.duration,
                         thumbnail=insp.thumbnail,
-                        stage="Downloading",
+                        is_live_capture=insp.is_live,
+                        stage="Capturing Live Stream" if insp.is_live else "Downloading",
                         progress=12,
-                        message=f"Downloading from {insp.platform}: '{insp.title}'...",
+                        message=(
+                            f"Connecting to {insp.platform} live stream: '{insp.title}'..."
+                            if insp.is_live
+                            else f"Downloading from {insp.platform}: '{insp.title}'..."
+                        ),
                     )
 
                 def _dl_progress(pct: int, msg: str) -> None:
                     mapped = 12 + int(pct * 0.28)
                     self.update_job(job_id, progress=mapped, message=msg)
 
+                self._check_cancelled(job_id)
                 video_path, segments, _info, inspection = download_video_and_captions(
                     req.url,
                     work_dir=work_dir,
@@ -559,11 +567,22 @@ class JobManager:
                     cookies_browser=req.cookies_browser,
                     inspection_cb=_on_inspect,
                     cancel_event=cancel_ev,
+                    live_capture_seconds=req.live_capture_seconds,
+                    live_from_start=req.live_from_start,
+                    proc_cb=lambda p: self._set_active_proc(job_id, p),
                 )
                 if req.use_source_cache:
-                    video_path = _save_cached_source(
-                        clean_url, max_h, req.caption_language, video_path, segments, inspection
-                    )
+                    if inspection.is_live:
+                        cdir = SOURCE_CACHE_DIR / f"live_{job_id}"
+                        cdir.mkdir(parents=True, exist_ok=True)
+                        cached_live = cdir / f"source{video_path.suffix}"
+                        shutil.copy2(video_path, cached_live)
+                        video_path = cached_live
+                        _prune_source_cache(keep_dir=cdir)
+                    else:
+                        video_path = _save_cached_source(
+                            clean_url, max_h, req.caption_language, video_path, segments, inspection
+                        )
 
             self._check_cancelled(job_id)
             preserved_path = self._preserve_job_source(job_id, job_dir, video_path, req.keep_source)
@@ -1065,6 +1084,7 @@ class JobManager:
                     caption_language=req.caption_language,
                     ollama_model=ollama_model,
                     ai_provider=req.ai_provider.value,
+                    speech_model=req.speech_model,
                 )
                 if ai_flag:
                     any_ai_used = True
@@ -1177,6 +1197,7 @@ class JobManager:
                     caption_position=req.caption_position,
                     caption_scale=req.caption_scale,
                     hook_banner=effective_hook_banner,
+                    hook_split_sec=hook_dur if (prepend_hook is not None and hook_dur > 0.0) else None,
                 )
                 if words:
                     preview = rendered_preview
@@ -1249,11 +1270,13 @@ class JobManager:
         if not req.highlighted_captions:
             notes.append("Zero AI used (captions disabled; moments picked via deterministic signals).")
         elif any_ai_used:
-            notes.append("Moments picked deterministically; offline Whisper-tiny generated word-level captions.")
+            notes.append("Moments picked deterministically; offline Whisper generated word-level captions.")
         else:
             notes.append(f"100% Zero AI ({inspection.platform} captions + audio/heatmap signals).")
         if ollama_model:
             notes.append(f"Local AI ({format_ai_label(ollama_model, req.ai_provider.value)}) enabled.")
+        if inspection.is_live:
+            notes.append(f"Captured {int(round(true_duration))}s live from {inspection.platform}.")
         if used_cache:
             notes.append("Reused cached source.")
         notes.append(f"Encoder: {encoder_used}.")
@@ -1337,6 +1360,7 @@ class JobManager:
             if patch.hook_banner is not None
             else (clip.hook_banner or opts.get("hook_banner", ""))
         ).strip()
+        hook_split_sec = round(prepend_hook[1] - prepend_hook[0], 3) if prepend_hook else None
         watermark = str(opts.get("watermark_text", ""))
         audio_boost = bool(opts.get("audio_boost", True))
         cam_src = CornerPosition(opts.get("streamer_cam_source", CornerPosition.OFF.value))
@@ -1408,6 +1432,7 @@ class JobManager:
                     caption_position=cap_pos,
                     caption_scale=cap_scale,
                     hook_banner=hook_banner,
+                    hook_split_sec=hook_split_sec,
                 )
 
             render_clip(

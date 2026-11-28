@@ -20,6 +20,7 @@ from app.models import (
     CaptionPosition,
     CaptionStyle,
     HighlightColor,
+    SpeechModelPreset,
     TranscriptSegment,
     WordTimestamp,
 )
@@ -30,7 +31,7 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 _WHISPER_LOCK = threading.Lock()
-_WHISPER_MODEL = None
+_WHISPER_MODELS: dict[str, object] = {}
 
 HIGHLIGHT_COLORS: dict[HighlightColor, str] = {
     HighlightColor.YELLOW: "&H0000E6FF&",
@@ -40,6 +41,7 @@ HIGHLIGHT_COLORS: dict[HighlightColor, str] = {
 }
 
 DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
+ARABIC_SCRIPT_RE = re.compile(r"[\u0600-\u06FF]")
 
 # Common Hinglish lexical overrides for natural readable Roman Hindi (Zero AI)
 HINGLISH_WORDS: dict[str, str] = {
@@ -79,6 +81,19 @@ HINGLISH_WORDS: dict[str, str] = {
     "मेरे": "mere", "मेरी": "meri", "अपना": "apna", "अपने": "apne", "अपनी": "apni",
     "करेंगे": "karenge", "करूंगा": "karunga", "करूँगा": "karunga", "आया": "aaya", "दिया": "diya", "लिया": "liya", "किया": "kiya",
     "फ़ायदा": "fayda", "फायदा": "fayda", "नुक़सान": "nuksaan", "नुकसान": "nuksaan", "आसान": "aasaan", "मुश्किल": "mushkil",
+    # Common live-stream & English loanwords spoken in Hinglish
+    "लाइव": "live", "स्ट्रीम": "stream", "स्ट्रीमिंग": "streaming", "गेम": "game", "गेमिंग": "gaming", "गेमप्ले": "gameplay",
+    "गाइस": "guys", "गाइज़": "guys", "ब्रो": "bro", "क्लच": "clutch", "चैट": "chat", "सुपरचैट": "superchat",
+    "टीम": "team", "मैच": "match", "रैंक": "rank", "किल": "kill", "हेडशॉट": "headshot", "विन": "win",
+    "प्ले": "play", "प्लेयर": "player", "प्लेयर्स": "players", "लिंक": "link", "मॉड": "mod", "स्पैम": "spam",
+    "क्लिप": "clip", "क्लिप्स": "clips", "शॉर्ट्स": "shorts", "रील": "reel", "रील्स": "reels",
+    "स्क्रीन": "screen", "माइक": "mic", "कैमरा": "camera", "फेस": "face", "साउंड": "sound", "पावर": "power",
+    "फॉलो": "follow", "थैंक्स": "thanks", "थैंक्यू": "thank you", "ओके": "okay", "सॉरी": "sorry",
+    "प्लीज": "please", "प्लीज़": "please", "वेलकम": "welcome", "हेलो": "hello", "हैलो": "hello", "हाय": "hi", "बाय": "bye",
+    "टाइम": "time", "स्टार्ट": "start", "एंड": "end", "लेवल": "level", "फाइनली": "finally",
+    "सीरियसली": "seriously", "एक्चुअली": "actually", "लिटरली": "literally",
+    "क्रेजी": "crazy", "क्रेज़ी": "crazy", "इंसेन": "insane", "सर": "sir", "मैम": "ma'am",
+    "यूट्यूब": "YouTube", "ट्विच": "Twitch", "किक": "Kick", "इंस्टाग्राम": "Instagram", "फेसबुक": "Facebook",
 }
 
 _DEVA_VOWELS = {
@@ -187,37 +202,70 @@ def _ffmpeg_exe() -> str:
     return "ffmpeg"
 
 
-def is_offline_model_cached() -> bool:
-    """Check whether the inbuilt tiny faster-whisper model exists locally in models/."""
-    model_repo = MODELS_DIR / "models--Systran--faster-whisper-tiny" / "snapshots"
+def _is_model_cached(model_name: str) -> bool:
+    """Return True when a specific faster-whisper model snapshot exists locally in models/."""
+    model_repo = MODELS_DIR / f"models--Systran--faster-whisper-{model_name}" / "snapshots"
     if not model_repo.exists():
         return False
     return any(p.is_dir() and (p / "model.bin").exists() for p in model_repo.iterdir())
 
 
-def _get_offline_whisper():
-    """Load the minimal CPU int8 Whisper-tiny model as a thread-safe singleton."""
-    global _WHISPER_MODEL
-    if _WHISPER_MODEL is not None:
-        return _WHISPER_MODEL
+def is_offline_model_cached() -> bool:
+    """Check whether any inbuilt faster-whisper model exists locally in models/."""
+    return any(_is_model_cached(name) for name in ("small", "base", "tiny"))
 
+
+def _load_whisper_instance(model_name: str):
+    """Load and cache a specific CPU int8 WhisperModel instance safely."""
     with _WHISPER_LOCK:
-        if _WHISPER_MODEL is not None:
-            return _WHISPER_MODEL
+        if model_name in _WHISPER_MODELS:
+            return _WHISPER_MODELS[model_name]
         from faster_whisper import WhisperModel
 
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        cached = is_offline_model_cached()
+        cached = _is_model_cached(model_name)
         cpu_threads = max(1, min(4, os.cpu_count() or 2))
-        _WHISPER_MODEL = WhisperModel(
-            "tiny",
+        inst = WhisperModel(
+            model_name,
             device="cpu",
             compute_type="int8",
             cpu_threads=cpu_threads,
             download_root=str(MODELS_DIR),
             local_files_only=cached,
         )
-        return _WHISPER_MODEL
+        _WHISPER_MODELS[model_name] = inst
+        return inst
+
+
+def _get_offline_whisper(
+    speech_model: SpeechModelPreset = SpeechModelPreset.AUTO,
+    caption_language: CaptionLanguage = CaptionLanguage.AUTO,
+):
+    """Resolve and load the most accurate available offline Whisper model with clean offline fallback."""
+    if speech_model == SpeechModelPreset.TINY:
+        candidates = ["tiny"]
+    elif speech_model == SpeechModelPreset.BASE:
+        candidates = ["base", "tiny"]
+    elif speech_model == SpeechModelPreset.SMALL:
+        candidates = ["small", "base", "tiny"]
+    else:
+        if _is_model_cached("small"):
+            candidates = ["small", "base", "tiny"]
+        elif caption_language in (CaptionLanguage.HINDI, CaptionLanguage.HINGLISH):
+            candidates = ["small", "base", "tiny"]
+        else:
+            candidates = ["base", "tiny"]
+
+    last_exc: Exception | None = None
+    for name in candidates:
+        try:
+            return _load_whisper_instance(name), name
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("No offline Whisper model could be loaded.")
 
 
 def _pace_segment_words_by_audio(
@@ -323,9 +371,15 @@ def extract_clip_words_from_youtube(
     return words, source
 
 
-HINDI_DEVANAGARI_PROMPT = "हिंदी में।"
+HINDI_DEVANAGARI_PROMPT = "नमस्ते दोस्तों, आज की लाइव स्ट्रीम में आपका स्वागत है। हिंदी में बिल्कुल सही और स्पष्ट शब्द।"
+ENGLISH_PROMPT = "Clear, accurate live stream commentary and conversation in natural English."
 _DEVA_LEADING_MARK_RE = re.compile(r"^[\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962-\u0963\u0971]+")
 _INDIC_LANGS = {"hi", "ur", "pa", "bn", "mr", "ne"}
+_NOISY_EN_FALSE_POSITIVES = {"cy", "nn", "la", "haw", "yo", "sn", "jw", "su", "mi", "fo", "mg", "tt"}
+_WHISPER_HALLUCINATION_RE = re.compile(
+    r"^(?:subtitles\s+by|amara\.org|transcribed\s+by|translated\s+by|copyright\b|mbc\b|all\s+rights\s+reserved|thank\s+you\s+for\s+watching\.?|thanks\s+for\s+watching\.?|please\s+subscribe\.?|प्रस्तुति\s*[:\-]?)\s*$",
+    re.I,
+)
 
 
 def _merge_indic_word_tokens(raw_words: list[WordTimestamp]) -> list[WordTimestamp]:
@@ -347,28 +401,27 @@ def _merge_indic_word_tokens(raw_words: list[WordTimestamp]) -> list[WordTimesta
     return merged
 
 
-def translate_phrases_to_hindi(
+def _translate_phrases(
     phrases: list[str],
+    target_lang: str = "hi",
+    source_lang: str = "auto",
     ollama_model: str = "",
     ai_provider: str = "auto",
 ) -> list[str] | None:
-    """
-    Translate short caption phrases to Hindi (Devanagari).
-    Uses local Ollama/LM Studio when configured, otherwise falls back to free zero-key web translation.
-    """
+    """Translate short caption phrases via local Ollama/LM Studio or free zero-key web translation."""
     clean_phrases = [re.sub(r"\s+", " ", p).strip() for p in phrases]
     if not clean_phrases or not any(clean_phrases):
         return None
 
-    # 1. Optional local AI translation when user enabled Ollama / LM Studio
+    target_label = "natural conversational Hindi in Devanagari script" if target_lang == "hi" else "clear natural English"
     if ollama_model.strip():
         try:
             from app.ollama_service import _local_ai_generate_json
 
             numbered = "\n".join(f"{i}: {p}" for i, p in enumerate(clean_phrases) if p)
             prompt = (
-                "Translate each numbered line accurately into natural conversational Hindi in Devanagari script.\n"
-                "Return JSON with key 'lines' mapping each string index to its Hindi translation.\n"
+                f"Translate each numbered line accurately into {target_label}.\n"
+                "Return JSON with key 'lines' mapping each string index to its translation.\n"
                 f"Lines:\n{numbered}"
             )
             res = _local_ai_generate_json(ollama_model, prompt, provider=ai_provider, timeout=22.0)
@@ -377,7 +430,7 @@ def translate_phrases_to_hindi(
                 ok = True
                 for i, orig in enumerate(clean_phrases):
                     tr = str(res["lines"].get(str(i)) or "").strip()
-                    if orig and not DEVANAGARI_RE.search(tr):
+                    if orig and target_lang == "hi" and not DEVANAGARI_RE.search(tr):
                         ok = False
                         break
                     out.append(tr or orig)
@@ -386,13 +439,12 @@ def translate_phrases_to_hindi(
         except Exception:
             pass
 
-    # 2. Zero-key free web translation fallback (useful when YouTube timedtext tlang=hi returns HTTP 429)
     def _gtx_batch(items: list[str]) -> list[str] | None:
         if not items:
             return []
         joined = "\n".join(items)
         query = urllib.parse.urlencode(
-            {"client": "gtx", "sl": "auto", "tl": "hi", "dt": "t", "q": joined}
+            {"client": "gtx", "sl": source_lang, "tl": target_lang, "dt": "t", "q": joined}
         )
         req = urllib.request.Request(
             f"https://translate.googleapis.com/translate_a/single?{query}",
@@ -415,7 +467,6 @@ def translate_phrases_to_hindi(
         chunk = clean_phrases[i0 : i0 + chunk_size]
         res_chunk = _gtx_batch(chunk)
         if res_chunk is None:
-            # Retry line-by-line if newline boundary collapsed
             res_chunk = []
             for item in chunk:
                 if not item:
@@ -430,13 +481,45 @@ def translate_phrases_to_hindi(
     return translated if len(translated) == len(clean_phrases) else None
 
 
-def translate_words_to_hindi(
+def translate_phrases_to_hindi(
+    phrases: list[str],
+    ollama_model: str = "",
+    ai_provider: str = "auto",
+) -> list[str] | None:
+    """Translate short caption phrases to Hindi (Devanagari)."""
+    return _translate_phrases(
+        phrases,
+        target_lang="hi",
+        source_lang="auto",
+        ollama_model=ollama_model,
+        ai_provider=ai_provider,
+    )
+
+
+def translate_phrases_to_english(
+    phrases: list[str],
+    ollama_model: str = "",
+    ai_provider: str = "auto",
+) -> list[str] | None:
+    """Translate short caption phrases to natural English."""
+    return _translate_phrases(
+        phrases,
+        target_lang="en",
+        source_lang="auto",
+        ollama_model=ollama_model,
+        ai_provider=ai_provider,
+    )
+
+
+def _translate_words(
     words: list[WordTimestamp],
+    target_lang: str,
+    source_lang: str = "auto",
     audio: AudioAnalysis | None = None,
     ollama_model: str = "",
     ai_provider: str = "auto",
 ) -> list[WordTimestamp] | None:
-    """Group timed words into natural phrases, translate to Hindi Devanagari, and re-pace word timings."""
+    """Group timed words into natural phrases, translate to target_lang, and re-pace word timings."""
     if not words:
         return None
 
@@ -460,20 +543,59 @@ def translate_words_to_hindi(
     if not phrase_groups:
         return None
 
-    eng_phrases = [" ".join(w.word.strip() for w in g) for g in phrase_groups]
-    hi_phrases = translate_phrases_to_hindi(
-        eng_phrases, ollama_model=ollama_model, ai_provider=ai_provider
+    src_phrases = [" ".join(w.word.strip() for w in g) for g in phrase_groups]
+    tr_phrases = _translate_phrases(
+        src_phrases,
+        target_lang=target_lang,
+        source_lang=source_lang,
+        ollama_model=ollama_model,
+        ai_provider=ai_provider,
     )
-    if not hi_phrases:
+    if not tr_phrases:
         return None
 
     out_words: list[WordTimestamp] = []
-    for grp, hi_txt in zip(phrase_groups, hi_phrases):
+    for grp, tr_txt in zip(phrase_groups, tr_phrases):
         p_start = grp[0].start
         p_end = max(p_start + 0.25, grp[-1].end)
-        text_to_pace = hi_txt.strip() or " ".join(w.word.strip() for w in grp)
+        text_to_pace = tr_txt.strip() or " ".join(w.word.strip() for w in grp)
         out_words.extend(_pace_segment_words_by_audio(text_to_pace, p_start, p_end, audio))
     return out_words or None
+
+
+def translate_words_to_hindi(
+    words: list[WordTimestamp],
+    audio: AudioAnalysis | None = None,
+    ollama_model: str = "",
+    ai_provider: str = "auto",
+    source_lang: str = "auto",
+) -> list[WordTimestamp] | None:
+    """Group timed words into natural phrases, translate to Hindi Devanagari, and re-pace word timings."""
+    return _translate_words(
+        words,
+        target_lang="hi",
+        source_lang=source_lang,
+        audio=audio,
+        ollama_model=ollama_model,
+        ai_provider=ai_provider,
+    )
+
+
+def translate_words_to_english(
+    words: list[WordTimestamp],
+    audio: AudioAnalysis | None = None,
+    ollama_model: str = "",
+    ai_provider: str = "auto",
+) -> list[WordTimestamp] | None:
+    """Group timed words into natural phrases, translate to English, and re-pace word timings."""
+    return _translate_words(
+        words,
+        target_lang="en",
+        source_lang="auto",
+        audio=audio,
+        ollama_model=ollama_model,
+        ai_provider=ai_provider,
+    )
 
 
 def _words_match_requested_language(words: list[WordTimestamp], caption_language: CaptionLanguage) -> bool:
@@ -481,6 +603,8 @@ def _words_match_requested_language(words: list[WordTimestamp], caption_language
     if not words or caption_language == CaptionLanguage.AUTO:
         return bool(words)
     joined = " ".join(w.word for w in words)
+    if caption_language in (CaptionLanguage.HINDI, CaptionLanguage.HINGLISH) and ARABIC_SCRIPT_RE.search(joined):
+        return False
     alpha_chars = [ch for ch in joined if ch.isalpha()]
     if not alpha_chars:
         return True
@@ -489,12 +613,38 @@ def _words_match_requested_language(words: list[WordTimestamp], caption_language
     total = len(alpha_chars)
 
     if caption_language == CaptionLanguage.HINDI:
-        return (deva_count / total) >= 0.20
+        return (deva_count / total) >= 0.25
     if caption_language == CaptionLanguage.ENGLISH:
-        return (latin_count / total) >= 0.45
+        return (latin_count / total) >= 0.55 and deva_count == 0
     if caption_language == CaptionLanguage.HINGLISH:
-        return ((deva_count + latin_count) / total) >= 0.35
+        return ((deva_count + latin_count) / total) >= 0.45
     return True
+
+
+def _extract_whisper_words(seg_iter, clip_dur: float) -> list[WordTimestamp]:
+    """Collect word timestamps from faster-whisper segments while filtering silence hallucinations."""
+    words: list[WordTimestamp] = []
+    for seg in seg_iter:
+        seg_txt = re.sub(r"\s+", " ", (getattr(seg, "text", "") or "")).strip()
+        if not seg_txt or _WHISPER_HALLUCINATION_RE.match(seg_txt):
+            continue
+        no_speech = float(getattr(seg, "no_speech_prob", 0.0) or 0.0)
+        avg_lp = float(getattr(seg, "avg_logprob", 0.0) or 0.0)
+        if no_speech > 0.85 and avg_lp < -1.15:
+            continue
+        if not getattr(seg, "words", None):
+            continue
+        for w in seg.words:
+            token = (w.word or "").strip()
+            if not token:
+                continue
+            # Collapse runaway 4+ identical consecutive single-word hallucinations
+            if len(words) >= 3 and all(prev.word.lower() == token.lower() for prev in words[-3:]):
+                continue
+            ws = max(0.0, float(w.start))
+            we = min(clip_dur, max(ws + 0.06, float(w.end)))
+            words.append(WordTimestamp(word=token, start=round(ws, 3), end=round(we, 3)))
+    return _merge_indic_word_tokens(words)
 
 
 def transcribe_clip_offline_tiny(
@@ -502,8 +652,9 @@ def transcribe_clip_offline_tiny(
     clip_start: float,
     clip_end: float,
     caption_language: CaptionLanguage = CaptionLanguage.AUTO,
+    speech_model: SpeechModelPreset = SpeechModelPreset.AUTO,
 ) -> list[WordTimestamp]:
-    """Run the inbuilt minimal CPU int8 Whisper-tiny model ONLY on the selected clip interval."""
+    """Run offline CPU int8 Whisper (small/base/tiny) on normalized audio for the selected clip interval."""
     import numpy as np
 
     clip_dur = max(0.5, clip_end - clip_start)
@@ -514,6 +665,7 @@ def transcribe_clip_offline_tiny(
         "-i", str(video_path),
         "-t", f"{clip_dur:.3f}",
         "-vn",
+        "-af", "highpass=f=70,aresample=async=1:first_pts=0",
         "-ac", "1",
         "-ar", "16000",
         "-f", "s16le",
@@ -524,73 +676,109 @@ def transcribe_clip_offline_tiny(
         return []
 
     audio_np = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
-    model = _get_offline_whisper()
+    if len(audio_np) == 0:
+        return []
+    audio_np = audio_np - float(np.mean(audio_np))
+    peak = float(np.max(np.abs(audio_np)))
+    if 0.002 < peak < 0.75:
+        audio_np = np.clip(audio_np * (0.85 / peak), -1.0, 1.0)
+
+    model, model_name = _get_offline_whisper(speech_model=speech_model, caption_language=caption_language)
+
+    vad_params = {
+        "threshold": 0.35,
+        "min_speech_duration_ms": 150,
+        "min_silence_duration_ms": 450,
+        "speech_pad_ms": 220,
+    }
+    detected_lang, detected_prob = "", 0.0
+    try:
+        detected_lang, detected_prob, _ = model.detect_language(
+            audio_np,
+            vad_filter=True,
+            vad_parameters=vad_params,
+            language_detection_segments=3,
+        )
+    except Exception:
+        try:
+            detected_lang, detected_prob, _ = model.detect_language(
+                audio_np,
+                vad_filter=False,
+                language_detection_segments=3,
+            )
+        except Exception:
+            detected_lang, detected_prob = "", 0.0
 
     whisper_lang: str | None = None
     whisper_task: str = "transcribe"
     initial_prompt: str | None = None
 
-    try:
-        detected_lang, detected_prob, _ = model.detect_language(audio_np, vad_filter=True)
-    except Exception:
-        detected_lang, detected_prob = "", 0.0
-
     if caption_language == CaptionLanguage.ENGLISH:
-        if not detected_lang or detected_lang == "en" or detected_prob < 0.40:
+        if (
+            not detected_lang
+            or detected_lang == "en"
+            or detected_prob < 0.72
+            or detected_lang in _NOISY_EN_FALSE_POSITIVES
+        ):
             whisper_lang = "en"
             whisper_task = "transcribe"
+            initial_prompt = ENGLISH_PROMPT
         else:
-            # Translate non-English audio (e.g. Hindi) cleanly into English captions
             whisper_lang = detected_lang
             whisper_task = "translate"
     elif caption_language == CaptionLanguage.HINDI:
-        if not detected_lang or detected_lang in _INDIC_LANGS or detected_prob < 0.60:
-            whisper_lang = "hi"
-            whisper_task = "transcribe"
-            initial_prompt = HINDI_DEVANAGARI_PROMPT
-        else:
-            # Non-Hindi audio (e.g. English): transcribe cleanly without forcing broken phonetic Hindi
-            whisper_lang = detected_lang
-            whisper_task = "transcribe" if detected_lang == "en" else "translate"
-    elif caption_language == CaptionLanguage.HINGLISH:
-        if detected_lang == "en" and detected_prob >= 0.65:
+        if detected_lang == "en" and detected_prob >= 0.88:
             whisper_lang = "en"
             whisper_task = "transcribe"
-        elif not detected_lang or detected_lang in _INDIC_LANGS or detected_prob < 0.60:
+            initial_prompt = ENGLISH_PROMPT
+        else:
             whisper_lang = "hi"
             whisper_task = "transcribe"
             initial_prompt = HINDI_DEVANAGARI_PROMPT
+    elif caption_language == CaptionLanguage.HINGLISH:
+        if detected_lang == "en" and detected_prob >= 0.88:
+            whisper_lang = "en"
+            whisper_task = "transcribe"
+            initial_prompt = ENGLISH_PROMPT
         else:
-            whisper_lang = detected_lang
-            whisper_task = "translate"
+            whisper_lang = "hi"
+            whisper_task = "transcribe"
+            initial_prompt = HINDI_DEVANAGARI_PROMPT
     else:
         if detected_lang in {"hi", "ur"}:
             whisper_lang = "hi"
             initial_prompt = HINDI_DEVANAGARI_PROMPT
+        elif detected_lang and detected_prob >= 0.45 and detected_lang not in _NOISY_EN_FALSE_POSITIVES:
+            whisper_lang = detected_lang
 
-    beam_sz = 2 if whisper_lang == "hi" else 1
-    seg_iter, _ = model.transcribe(
-        audio_np,
+    beam_sz = 2 if model_name == "small" else 3
+    transcribe_kwargs = dict(
         language=whisper_lang,
         task=whisper_task,
         beam_size=beam_sz,
         word_timestamps=True,
-        vad_filter=True,
         condition_on_previous_text=False,
+        repetition_penalty=1.12,
+        no_repeat_ngram_size=3,
+        hallucination_silence_threshold=1.5,
         initial_prompt=initial_prompt,
     )
-    words: list[WordTimestamp] = []
-    for seg in seg_iter:
-        if not seg.words:
-            continue
-        for w in seg.words:
-            token = (w.word or "").strip()
-            if not token:
-                continue
-            ws = max(0.0, float(w.start))
-            we = min(clip_dur, max(ws + 0.06, float(w.end)))
-            words.append(WordTimestamp(word=token, start=round(ws, 3), end=round(we, 3)))
-    return _merge_indic_word_tokens(words)
+    seg_iter, _ = model.transcribe(
+        audio_np,
+        vad_filter=True,
+        vad_parameters=vad_params,
+        **transcribe_kwargs,
+    )
+    words = _extract_whisper_words(seg_iter, clip_dur)
+
+    # If VAD filtered out quiet/music-backed live speech, retry without VAD before giving up
+    if len(words) < 2 and peak >= 0.015:
+        seg_iter_raw, _ = model.transcribe(audio_np, vad_filter=False, **transcribe_kwargs)
+        words_raw = _extract_whisper_words(seg_iter_raw, clip_dur)
+        if len(words_raw) > len(words):
+            words = words_raw
+
+    return words
 
 
 def _apply_language_format(words: list[WordTimestamp], caption_language: CaptionLanguage) -> list[WordTimestamp]:
@@ -616,8 +804,9 @@ def get_clip_words(
     caption_language: CaptionLanguage = CaptionLanguage.AUTO,
     ollama_model: str = "",
     ai_provider: str = "auto",
+    speech_model: SpeechModelPreset = SpeechModelPreset.AUTO,
 ) -> tuple[list[WordTimestamp], Literal["youtube_word_sync", "youtube_audio_paced", "offline_whisper_tiny", "none"], bool]:
-    """Resolve word-level timestamps with Zero-AI captions first, offline tiny fallback & clean Hindi translation."""
+    """Resolve word-level timestamps with Zero-AI captions first, high-accuracy offline Whisper fallback & clean translation."""
     yt_words: list[WordTimestamp] = []
     yt_source: Literal["youtube_word_sync", "youtube_audio_paced", "none"] = "none"
 
@@ -629,7 +818,7 @@ def get_clip_words(
     if mode == CaptionEngineMode.NO_AI:
         return [], "none", False
 
-    # If YouTube gave clean non-Hindi captions (e.g. English when tlang=hi hit 429), translate directly to Hindi/Hinglish
+    # If platform gave clean captions in another language (e.g. English when tlang=hi hit 429), translate cleanly
     if yt_words and caption_language in (CaptionLanguage.HINDI, CaptionLanguage.HINGLISH):
         translated_hi = translate_words_to_hindi(
             yt_words, audio=audio, ollama_model=ollama_model, ai_provider=ai_provider
@@ -637,17 +826,64 @@ def get_clip_words(
         if translated_hi:
             return _apply_language_format(translated_hi, caption_language), yt_source, False
         return _apply_language_format(yt_words, caption_language), yt_source, False
+    if yt_words and caption_language == CaptionLanguage.ENGLISH:
+        translated_en = translate_words_to_english(
+            yt_words, audio=audio, ollama_model=ollama_model, ai_provider=ai_provider
+        )
+        if translated_en:
+            return translated_en, yt_source, False
 
-    ai_words = transcribe_clip_offline_tiny(video_path, clip_start, clip_end, caption_language)
+    ai_words = transcribe_clip_offline_tiny(
+        video_path,
+        clip_start,
+        clip_end,
+        caption_language,
+        speech_model=speech_model,
+    )
     if ai_words:
-        if caption_language in (CaptionLanguage.HINDI, CaptionLanguage.HINGLISH) and not _words_match_requested_language(
-            ai_words, CaptionLanguage.HINDI
+        joined_ai = " ".join(w.word for w in ai_words)
+        has_arabic = bool(ARABIC_SCRIPT_RE.search(joined_ai))
+        has_deva = bool(DEVANAGARI_RE.search(joined_ai))
+
+        if caption_language == CaptionLanguage.ENGLISH and not _words_match_requested_language(
+            ai_words, CaptionLanguage.ENGLISH
         ):
-            translated_ai = translate_words_to_hindi(
+            translated_en = translate_words_to_english(
                 ai_words, audio=audio, ollama_model=ollama_model, ai_provider=ai_provider
             )
-            if translated_ai:
-                return _apply_language_format(translated_ai, caption_language), "offline_whisper_tiny", True
+            if translated_en:
+                return translated_en, "offline_whisper_tiny", True
+        elif caption_language == CaptionLanguage.HINDI and (
+            has_arabic or not _words_match_requested_language(ai_words, CaptionLanguage.HINDI)
+        ):
+            translated_hi = translate_words_to_hindi(
+                ai_words,
+                audio=audio,
+                ollama_model=ollama_model,
+                ai_provider=ai_provider,
+                source_lang="ur" if has_arabic else "auto",
+            )
+            if translated_hi:
+                return translated_hi, "offline_whisper_tiny", True
+        elif caption_language == CaptionLanguage.HINGLISH:
+            if has_arabic or not has_deva:
+                # Only translate when Urdu/Arabic script slipped in or audio was purely non-Hindi/non-mixed
+                if has_arabic or not _words_match_requested_language(ai_words, CaptionLanguage.HINGLISH):
+                    translated_hi = translate_words_to_hindi(
+                        ai_words,
+                        audio=audio,
+                        ollama_model=ollama_model,
+                        ai_provider=ai_provider,
+                        source_lang="ur" if has_arabic else "auto",
+                    )
+                    if translated_hi:
+                        return _apply_language_format(translated_hi, CaptionLanguage.HINGLISH), "offline_whisper_tiny", True
+                elif not has_deva and _words_match_requested_language(ai_words, CaptionLanguage.ENGLISH):
+                    translated_hi = translate_words_to_hindi(
+                        ai_words, audio=audio, ollama_model=ollama_model, ai_provider=ai_provider
+                    )
+                    if translated_hi:
+                        return _apply_language_format(translated_hi, CaptionLanguage.HINGLISH), "offline_whisper_tiny", True
         return _apply_language_format(ai_words, caption_language), "offline_whisper_tiny", True
     return [], "none", True
 
@@ -709,7 +945,12 @@ def parse_custom_script_or_srt(
     return _apply_language_format(words, caption_language)
 
 
-def _group_words_into_lines(words: list[WordTimestamp], max_words: int = 4, max_chars: int = 24) -> list[list[WordTimestamp]]:
+def _group_words_into_lines(
+    words: list[WordTimestamp],
+    max_words: int = 4,
+    max_chars: int = 24,
+    hook_split_sec: float | None = None,
+) -> list[list[WordTimestamp]]:
     """Group timed words into punchy, readable 3-4 word caption phrases."""
     groups: list[list[WordTimestamp]] = []
     cur: list[WordTimestamp] = []
@@ -720,15 +961,21 @@ def _group_words_into_lines(words: list[WordTimestamp], max_words: int = 4, max_
         if not clean:
             continue
         gap = (w.start - cur[-1].end) if cur else 0.0
+        crossed_hook = bool(
+            hook_split_sec is not None
+            and cur
+            and cur[-1].end <= hook_split_sec + 0.05
+            and w.start >= hook_split_sec - 0.05
+        )
         would_exceed = len(cur) >= max_words or (cur_chars + len(clean) + 1 > max_chars and len(cur) >= 2)
-        if cur and (would_exceed or gap > 0.45):
+        if cur and (would_exceed or gap > 0.45 or crossed_hook):
             groups.append(cur)
             cur = []
             cur_chars = 0
 
         cur.append(w)
         cur_chars += len(clean) + 1
-        if clean.endswith((".", "?", "!", ",")) and len(cur) >= 2:
+        if clean.endswith((".", "?", "!", ",", "।")) and len(cur) >= 2:
             groups.append(cur)
             cur = []
             cur_chars = 0
@@ -843,6 +1090,7 @@ def write_highlighted_ass_and_srt(
     caption_position: CaptionPosition = CaptionPosition.BOTTOM,
     caption_scale: float = 1.0,
     hook_banner: str = "",
+    hook_split_sec: float | None = None,
 ) -> str:
     """Write word-by-word highlighted .ass subtitle (plus optional watermark & hook banner) and .srt file."""
     is_vertical = (video_h >= video_w) if aspect_ratio == AspectRatio.ORIGINAL else (aspect_ratio != AspectRatio.LANDSCAPE)
@@ -948,7 +1196,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     else:
         max_words = 4 if is_vertical else 6
         max_chars = 22 if is_vertical else 38
-    groups = _group_words_into_lines(words, max_words=max_words, max_chars=max_chars)
+    groups = _group_words_into_lines(
+        words,
+        max_words=max_words,
+        max_chars=max_chars,
+        hook_split_sec=hook_split_sec,
+    )
     prev_cs_end = 0
 
     for grp_idx, grp in enumerate(groups, start=1):

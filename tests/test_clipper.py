@@ -26,7 +26,7 @@ from app.face_tracker import (
     track_corner_streamer_face,
     track_main_speaker_9_16,
 )
-from app.main import delete_job_output, get_local_ai_status, get_ollama_status, health_check, list_active_queue, wipe_source_cache
+from app.main import delete_job_output, get_local_ai_status, get_ollama_status, health_check, inspect_source_video, list_active_queue, wipe_source_cache
 from app.models import (
     AspectRatio,
     CaptionEngineMode,
@@ -38,8 +38,10 @@ from app.models import (
     CornerPosition,
     EncoderMode,
     HighlightColor,
+    InspectRequest,
     MomentCandidate,
     QualityPreset,
+    SpeechModelPreset,
     SplitCamPosition,
     TranscriptSegment,
     WordTimestamp,
@@ -63,8 +65,13 @@ from app.social_suggester import generate_best_hook_banner, suggest_social_metad
 from app.video_renderer import _cam_source_crop, _pip_dimensions, detect_available_encoders, probe_video, render_clip
 from app.youtube_auth import cookies_to_netscape_text, find_chromium_browser
 from app.youtube_service import (
+    VideoInspection,
     _base_ydl_opts,
+    _build_inspection_from_info,
+    _capture_live_stream_ffmpeg,
+    _probe_stream_starts,
     _select_caption_languages,
+    _wrap_dvr_fragments_for_capture,
     download_video_and_captions,
     find_ffmpeg_dir,
     find_node_exe,
@@ -1193,6 +1200,446 @@ class TestNewFeaturesSuite(unittest.TestCase):
             self.assertEqual(len(segs), 1)
             self.assertEqual(segs[0].text, "Watch this!")
             self.assertEqual(insp.video_id, "vid429")
+
+    def test_live_stream_url_validation_multiplatform(self) -> None:
+        cases = [
+            ("https://www.youtube.com/@MrBeast/live", "https://www.youtube.com/@MrBeast/live", "YouTube"),
+            ("https://www.youtube.com/channel/UCX6OQ3DkcsbYNE6H8uQQuVA/live", "https://www.youtube.com/channel/UCX6OQ3DkcsbYNE6H8uQQuVA/live", "YouTube"),
+            ("https://www.youtube.com/c/WorldPixelMap/live", "https://www.youtube.com/c/WorldPixelMap/live", "YouTube"),
+            ("https://www.youtube.com/user/testuser/live", "https://www.youtube.com/user/testuser/live", "YouTube"),
+            ("https://www.youtube.com/live/jfKfPfyJRdk", "https://www.youtube.com/watch?v=jfKfPfyJRdk", "YouTube"),
+            ("https://www.twitch.tv/shroud", "https://www.twitch.tv/shroud", "Twitch"),
+            ("https://kick.com/xqc", "https://kick.com/xqc", "Kick"),
+            ("https://www.tiktok.com/@creator/live", "https://www.tiktok.com/@creator/live", "TikTok"),
+            ("https://www.facebook.com/gaming/live", "https://www.facebook.com/gaming/live", "Facebook"),
+            ("https://chzzk.naver.com/live/abc123", "https://chzzk.naver.com/live/abc123", "CHZZK"),
+            ("https://play.sooplive.co.kr/streamer", "https://play.sooplive.co.kr/streamer", "SOOP"),
+            ("https://live.bilibili.com/123456", "https://live.bilibili.com/123456", "Bilibili"),
+            ("https://www.douyu.com/99999", "https://www.douyu.com/99999", "Douyu"),
+            ("https://www.huya.com/streamer", "https://www.huya.com/streamer", "Huya"),
+            ("https://dlive.tv/streamer", "https://dlive.tv/streamer", "DLive"),
+            ("https://live.vkvideo.ru/streamer", "https://live.vkvideo.ru/streamer", "VK Video Live"),
+            ("https://live.nicovideo.jp/watch/lv123", "https://live.nicovideo.jp/watch/lv123", "Niconico"),
+            ("https://17.live/en/live/12345", "https://17.live/en/live/12345", "17LIVE"),
+            ("https://trovo.live/s/streamer", "https://trovo.live/s/streamer", "Trovo"),
+            ("https://cdn.example.com/live/master.m3u8", "https://cdn.example.com/live/master.m3u8", "Direct Stream"),
+            ("rtmp://live.example.com/app/streamkey", "rtmp://live.example.com/app/streamkey", "Direct Stream"),
+            ("rtsp://cam.example.com/live.sdp", "rtsp://cam.example.com/live.sdp", "Direct Stream"),
+        ]
+        for raw, expected_url, expected_plat in cases:
+            got_url, got_plat = validate_video_url(raw)
+            self.assertEqual((got_url, got_plat), (expected_url, expected_plat))
+
+        self.assertEqual(
+            validate_youtube_url("https://www.youtube.com/@MrBeast/live"),
+            "https://www.youtube.com/@MrBeast/live",
+        )
+        with self.assertRaises(ValueError):
+            validate_video_url("rtmp://127.0.0.1/live/secret")
+        with self.assertRaises(ValueError):
+            validate_video_url("https://localhost/live/master.m3u8")
+
+    def test_live_stream_inspection_and_dvr_fallback(self) -> None:
+        from unittest.mock import patch
+
+        live_info = {
+            "id": "live123",
+            "title": "24/7 LoFi Live",
+            "uploader": "StreamHost",
+            "is_live": True,
+            "live_status": "is_live",
+            "duration": None,
+            "extractor_key": "TwitchStream",
+            "formats": [{"format_id": "1080p", "is_from_start": True}],
+        }
+        insp = _build_inspection_from_info(live_info, "Streaming Video", CaptionLanguage.AUTO)
+        self.assertTrue(insp.is_live)
+        self.assertEqual(insp.live_status, "is_live")
+        self.assertTrue(insp.supports_dvr_from_start)
+        self.assertEqual(insp.platform, "TwitchStream")
+
+        with self.assertRaises(ValueError):
+            _build_inspection_from_info({"id": "up1", "live_status": "is_upcoming"}, "YouTube", CaptionLanguage.AUTO)
+
+        with patch("app.main.inspect_video", return_value=insp):
+            resp = inspect_source_video(InspectRequest(url="https://www.twitch.tv/streamhost"))
+            self.assertTrue(resp.is_live)
+            self.assertTrue(resp.supports_dvr_from_start)
+            self.assertEqual(resp.recommended_max_clips, 10)
+
+        # Fallback from DVR (--live-from-start) to live edge when platform lacks DVR formats
+        seen_from_start: list[bool] = []
+
+        class _FallbackYDL:
+            def __init__(self, opts):
+                self.params = dict(opts)
+                self.cookiejar = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def extract_info(self, url, download=False):
+                flag = bool(self.params.get("live_from_start"))
+                seen_from_start.append(flag)
+                if flag:
+                    raise RuntimeError("--live-from-start is passed, but there are no formats that can be downloaded from the start.")
+                return {
+                    "id": "kicklive1",
+                    "title": "Kick Live Stream",
+                    "uploader": "KickHost",
+                    "is_live": True,
+                    "live_status": "is_live",
+                    "url": "https://cdn.example.com/kick.m3u8",
+                    "protocol": "m3u8_native",
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            fake_mp4 = work / "source.mp4"
+            fake_mp4.write_bytes(b"captured")
+            with (
+                patch("app.youtube_service.yt_dlp.YoutubeDL", _FallbackYDL),
+                patch("app.youtube_service._capture_live_stream_ffmpeg", return_value=fake_mp4) as cap_mock,
+            ):
+                vpath, segs, _, out_insp = download_video_and_captions(
+                    "https://kick.com/kickhost",
+                    work_dir=work,
+                    live_capture_seconds=60,
+                    live_from_start=True,
+                )
+            self.assertEqual(seen_from_start, [True, False])
+            self.assertEqual(vpath, fake_mp4)
+            self.assertEqual(segs, [])
+            self.assertTrue(out_insp.is_live)
+            self.assertEqual(cap_mock.call_args.kwargs["capture_seconds"], 60)
+
+    def test_ffmpeg_live_capture_and_dvr_fragment_wrapper(self) -> None:
+        import threading
+
+        # 1. Verify _wrap_dvr_fragments_for_capture bounds callable YouTube DVR generators
+        def _gen(ctx):
+            i = 0
+            while True:
+                yield {"url": f"https://example.com/seg?sq={i}"}
+                i += 1
+
+        dvr_info = {
+            "formats": [{"format_id": "v1", "target_duration": 5.0, "fragments": _gen}],
+            "requested_formats": [{"format_id": "v1", "target_duration": 5.0, "fragments": _gen}],
+        }
+        self.assertTrue(_wrap_dvr_fragments_for_capture(dvr_info, capture_seconds=12))
+        items = list(dvr_info["formats"][0]["fragments"]({}))
+        self.assertEqual(len(items), 4)  # ceil(12/5) + 1 = 4
+
+        # 2. Integration test with FFmpeg reading a live-style TS stream with non-zero PTS
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            ts_src = work / "live_feed.ts"
+            subprocess.run(
+                [
+                    _ffmpeg_exe(),
+                    "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=320x240:rate=24",
+                    "-f", "lavfi", "-i", "sine=frequency=520",
+                    "-t", "10",
+                    "-output_ts_offset", "7200",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac",
+                    str(ts_src),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            progress_events: list[tuple[int, str]] = []
+            cap_dir = work / "cap"
+            cap_dir.mkdir(parents=True, exist_ok=True)
+            captured = _capture_live_stream_ffmpeg(
+                selected_formats=[{"url": str(ts_src), "protocol": "file"}],
+                info={"id": "ts1"},
+                work_dir=cap_dir,
+                platform="Twitch",
+                capture_seconds=4,
+                progress_cb=lambda pct, msg: progress_events.append((pct, msg)),
+            )
+            self.assertTrue(captured.exists())
+            info = probe_video(captured)
+            self.assertGreaterEqual(info.duration, 3.2)
+            self.assertLessEqual(info.duration, 5.2)
+            self.assertTrue(any("Capturing Twitch live stream" in msg for _, msg in progress_events))
+
+            # Cancellation must abort immediately
+            cancel_ev = threading.Event()
+            cancel_ev.set()
+            cap_cancel_dir = work / "cap_cancel"
+            cap_cancel_dir.mkdir(parents=True, exist_ok=True)
+            with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                _capture_live_stream_ffmpeg(
+                    selected_formats=[{"url": str(ts_src), "protocol": "file"}],
+                    info={"id": "ts1"},
+                    work_dir=cap_cancel_dir,
+                    platform="Kick",
+                    capture_seconds=10,
+                    cancel_event=cancel_ev,
+                )
+
+    def test_live_stream_pipeline_end_to_end(self) -> None:
+        import time
+        from unittest.mock import patch
+        from app.pipeline import _load_cached_source
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            live_src = work / "captured_live.mp4"
+            subprocess.run(
+                [
+                    _ffmpeg_exe(),
+                    "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+                    "-t", "12",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac",
+                    str(live_src),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            live_insp = VideoInspection(
+                video_id="twitch_live_1",
+                platform="Twitch",
+                title="Live Clutch Stream",
+                channel="ProStreamer",
+                duration=0.0,
+                thumbnail=None,
+                heatmap=[],
+                caption_languages=[],
+                source_url="https://www.twitch.tv/prostreamer",
+                is_live=True,
+                live_status="is_live",
+                supports_dvr_from_start=False,
+            )
+
+            def _fake_download(url, work_dir, **kwargs):
+                if kwargs.get("inspection_cb"):
+                    kwargs["inspection_cb"](live_insp)
+                dest = work_dir / "source.mp4"
+                dest.write_bytes(live_src.read_bytes())
+                return dest, [], {"is_live": True}, live_insp
+
+            req = ClipRequest(
+                url="https://www.twitch.tv/prostreamer",
+                num_clips=1,
+                clip_duration=10,
+                live_capture_seconds=30,
+                highlighted_captions=False,
+                auto_hook=False,
+                aspect_ratio=AspectRatio.VERTICAL_CROP,
+                encoder_mode=EncoderMode.CPU,
+                use_source_cache=True,
+            )
+            with patch("app.pipeline.download_video_and_captions", side_effect=_fake_download):
+                job = job_manager.submit_job(req, platform="Twitch")
+                job_id = job.job_id
+                try:
+                    deadline = time.time() + 30.0
+                    final = job
+                    while time.time() < deadline:
+                        cur = job_manager.get_job(job_id)
+                        if cur and cur.status in {"completed", "failed", "cancelled"}:
+                            final = cur
+                            break
+                        time.sleep(0.2)
+
+                    self.assertEqual(final.status, "completed", msg=final.error)
+                    self.assertTrue(final.is_live_capture)
+                    self.assertEqual(len(final.clips), 1)
+                    self.assertIn("Captured", final.ai_note)
+                    # Live captures must not poison URL cache for future live jobs
+                    self.assertIsNone(_load_cached_source("https://www.twitch.tv/prostreamer", 720, CaptionLanguage.AUTO))
+                    # Single-clip trim still works on live_job_id cache!
+                    trimmed = job_manager.update_clip(
+                        job_id=job_id,
+                        rank=1,
+                        patch=ClipUpdateRequest(start=0.5, end=5.5),
+                    )
+                    self.assertAlmostEqual(trimmed.duration, 5.0, delta=0.2)
+                finally:
+                    delete_job_output(job_id)
+
+    def test_live_1h_limit_av_sync_and_multilang_caption_accuracy(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from pydantic import ValidationError
+        from app.caption_engine import transcribe_clip_offline_tiny
+
+        # 1. 1-Hour (3600s) capture window validation
+        req_1h = ClipRequest(url="https://www.twitch.tv/streamer", live_capture_seconds=3600, speech_model=SpeechModelPreset.SMALL)
+        self.assertEqual(req_1h.live_capture_seconds, 3600)
+        self.assertEqual(req_1h.speech_model, SpeechModelPreset.SMALL)
+        with self.assertRaises(ValidationError):
+            ClipRequest(url="https://www.twitch.tv/streamer", live_capture_seconds=3601)
+
+        # 2. Live capture A/V alignment when video IDR starts 1.5s after audio
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            v_only = work / "v.mp4"
+            a_only = work / "a.m4a"
+            skewed_ts = work / "skewed_live.ts"
+            subprocess.run(
+                [_ffmpeg_exe(), "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=8", "-c:v", "libx264", "-preset", "ultrafast", str(v_only)],
+                check=True,
+            )
+            subprocess.run(
+                [_ffmpeg_exe(), "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:d=10", "-c:a", "aac", str(a_only)],
+                check=True,
+            )
+            subprocess.run(
+                [_ffmpeg_exe(), "-y", "-v", "error", "-itsoffset", "1.5", "-i", str(v_only), "-i", str(a_only), "-t", "9", "-c", "copy", "-output_ts_offset", "600", str(skewed_ts)],
+                check=True,
+            )
+            cap_dir = work / "aligned"
+            cap_dir.mkdir(parents=True, exist_ok=True)
+            aligned_mp4 = _capture_live_stream_ffmpeg(
+                selected_formats=[{"url": str(skewed_ts), "protocol": "file"}],
+                info={"id": "skew1"},
+                work_dir=cap_dir,
+                platform="YouTube",
+                capture_seconds=6,
+            )
+            starts = _probe_stream_starts(aligned_mp4)
+            self.assertIn("video", starts)
+            self.assertIn("audio", starts)
+            self.assertLessEqual(abs(starts["video"] - starts["audio"]), 0.1)
+
+            # 3. Hinglish livestream loanword transliteration
+            hinglish = devanagari_to_hinglish("लाइव स्ट्रीम में गाइस ये क्लच देखो!")
+            self.assertEqual(hinglish.lower(), "live stream mein guys ye clutch dekho!")
+
+            # 4. Hook split prevents hook words from merging into main clip words
+            ass_split = work / "hook_split.ass"
+            srt_split = work / "hook_split.srt"
+            write_highlighted_ass_and_srt(
+                words=[
+                    WordTimestamp(word="Watch", start=0.2, end=0.8),
+                    WordTimestamp(word="this!", start=0.9, end=2.95),
+                    WordTimestamp(word="Hello", start=3.0, end=3.5),
+                    WordTimestamp(word="everyone", start=3.6, end=4.2),
+                ],
+                ass_path=ass_split,
+                srt_path=srt_split,
+                video_w=720,
+                video_h=1280,
+                clip_duration=5.0,
+                aspect_ratio=AspectRatio.VERTICAL_CROP,
+                highlight_color=HighlightColor.YELLOW,
+                hook_split_sec=3.0,
+            )
+            srt_body = srt_split.read_text(encoding="utf-8")
+            self.assertIn("Watch this!", srt_body)
+            self.assertIn("Hello everyone", srt_body)
+            self.assertNotIn("this! Hello", srt_body)
+
+            # 5. Whisper VAD fallback + hallucination filter + Urdu->Hindi conversion + English language routing
+            quiet_clip = work / "quiet_live.mp4"
+            subprocess.run(
+                [
+                    _ffmpeg_exe(), "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=4",
+                    "-f", "lavfi", "-i", "aevalsrc='0.03*sin(2*PI*440*t)':s=44100:d=4",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                    str(quiet_clip),
+                ],
+                check=True,
+            )
+
+            class _FakeModel:
+                def __init__(self, mode: str):
+                    self.mode = mode
+                    self.calls = []
+
+                def detect_language(self, audio_np, **kwargs):
+                    if self.mode == "noisy_en":
+                        return ("cy", 0.55, [])  # noisy false positive below 0.72 -> must keep English!
+                    return ("ur", 0.75, [])
+
+                def transcribe(self, audio_np, **kwargs):
+                    self.calls.append(kwargs)
+                    if self.mode == "vad_retry" and kwargs.get("vad_filter", True):
+                        return iter([]), None
+                    if self.mode == "noisy_en":
+                        segs = [
+                            SimpleNamespace(
+                                text="Subtitles by Amara.org",
+                                no_speech_prob=0.9,
+                                avg_logprob=-1.5,
+                                words=[SimpleNamespace(word="Subtitles", start=0.0, end=0.5)],
+                            ),
+                            SimpleNamespace(
+                                text="Live clutch moment",
+                                no_speech_prob=0.1,
+                                avg_logprob=-0.2,
+                                words=[
+                                    SimpleNamespace(word="Live", start=0.5, end=0.9),
+                                    SimpleNamespace(word="clutch", start=0.9, end=1.4),
+                                    SimpleNamespace(word="moment", start=1.4, end=2.0),
+                                ],
+                            ),
+                        ]
+                        return iter(segs), None
+                    # mode == "vad_retry" or "urdu_hi"
+                    segs = [
+                        SimpleNamespace(
+                            text="یہ لائیو کلپ ہے",
+                            no_speech_prob=0.1,
+                            avg_logprob=-0.2,
+                            words=[
+                                SimpleNamespace(word="یہ", start=0.4, end=0.8),
+                                SimpleNamespace(word="لائیو", start=0.8, end=1.3),
+                                SimpleNamespace(word="کلپ", start=1.3, end=1.8),
+                                SimpleNamespace(word="ہے", start=1.8, end=2.2),
+                            ],
+                        )
+                    ]
+                    return iter(segs), None
+
+            fake_en = _FakeModel("noisy_en")
+            with patch("app.caption_engine._get_offline_whisper", return_value=(fake_en, "small")):
+                en_words = transcribe_clip_offline_tiny(quiet_clip, 0.0, 4.0, CaptionLanguage.ENGLISH)
+            self.assertEqual([w.word for w in en_words], ["Live", "clutch", "moment"])
+            self.assertEqual(fake_en.calls[0]["language"], "en")
+            self.assertEqual(fake_en.calls[0]["task"], "transcribe")
+
+            fake_vad = _FakeModel("vad_retry")
+            with (
+                patch("app.caption_engine._get_offline_whisper", return_value=(fake_vad, "small")),
+                patch("app.caption_engine.translate_words_to_hindi", return_value=[
+                    WordTimestamp(word="यह", start=0.4, end=0.8),
+                    WordTimestamp(word="लाइव", start=0.8, end=1.3),
+                    WordTimestamp(word="क्लिप", start=1.3, end=1.8),
+                    WordTimestamp(word="है", start=1.8, end=2.2),
+                ]),
+            ):
+                hinglish_words, cap_src, ai_used = get_clip_words(
+                    video_path=quiet_clip,
+                    segments=[],
+                    clip_start=0.0,
+                    clip_end=4.0,
+                    audio=None,
+                    mode=CaptionEngineMode.AUTO,
+                    work_dir=work,
+                    rank=1,
+                    caption_language=CaptionLanguage.HINGLISH,
+                )
+            self.assertTrue(ai_used)
+            self.assertEqual(cap_src, "offline_whisper_tiny")
+            self.assertGreaterEqual(len(fake_vad.calls), 2)  # VAD retry happened cleanly
+            self.assertEqual([w.word for w in hinglish_words], ["yeh", "live", "clip", "hai"])
 
 
 if __name__ == "__main__":

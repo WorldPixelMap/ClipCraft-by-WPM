@@ -2,7 +2,7 @@
   <img src="logo.png" alt="Local ClipCraft by WPM Logo" width="84" height="84" />
   <h1>Local ClipCraft by WPM</h1>
   <p>
-    <strong>Turn long YouTube, Twitch, Kick &amp; Facebook videos into viral short clips with word-by-word highlighted captions — 100% locally on your own computer!</strong>
+    <strong>Turn long YouTube, Twitch, Kick, TikTok &amp; Facebook videos and live streams into viral short clips with word-by-word highlighted captions — 100% locally on your own computer!</strong>
   </p>
   <p>
     No paid APIs • No cloud AI keys • Works on minimal PCs • Universal Human-Face Cam Frame • English, Hindi &amp; Hinglish Captions
@@ -25,11 +25,12 @@
   - **Audio Energy & Speech Peaks** (loud reactions, excitement, laughter)
   - **Smart Hook Detection** (questions, exclamations, catchy lines)
   - **Clean Pause Cutting** (never cuts off mid-word!)
+  - **Auto-Prepended ~3s Video Hook Teaser** (pulls a punchy highlight teaser from inside the clip to hook viewers immediately, with clean caption separation)
   - **Manual Start/End Range & Single-Clip Trim/Re-render** (`mm:ss` or `±1s` nudges to adjust boundaries on individual clips without re-running the whole video)
   - **Dead-Air Jump-Cut Mode**: Optionally strips long silent pauses (`> 0.65s`) automatically while keeping word captions frame-accurate
 - **Word-by-Word Highlighted Captions & Inline Editor**:
-  - Uses existing platform captions first (**0% AI!**), or falls back to an **inbuilt tiny offline speech model** (`faster-whisper-tiny`, CPU-friendly) with automatic translation/language matching when a video lacks matching captions.
-  - Strict support for **Auto**, **English**, **Hindi (`हिंदी`)**, and **Hinglish**!
+  - Uses existing platform captions first (**0% AI!**), or falls back to **inbuilt offline Whisper speech models** (`Small`, `Base`, or `Tiny` via **Speech Caption Accuracy**, CPU-friendly with automatic offline fallback) with **frame-locked live A/V alignment**, packet-drop audio resampling, quiet-speech normalization, and multi-segment language detection.
+  - Accurate support for **Auto**, **English**, **Hindi (`हिंदी`)** (with automatic Urdu-to-Devanagari conversion), and **Hinglish** (preserving natural English &amp; livestreaming loanwords alongside Romanized Hindi)!
   - Customize **Caption Style** (`Classic Outline`, `Boxed Pill`, `Pop 1–2 Words`, `Clean Minimal`), **Position** (`Bottom`, `Center`, `Top`), **Font Size**, **Highlight Color**, optional **4s Top Hook Banner**, and **`@Watermark`**.
   - **Inline Word Editor**: Fix typos or Hinglish/Hindi spellings directly on any generated clip card and click **Re-burn Clip**.
 - **Universal Real-Human Streamer Cam Frame & 50/50 Split-Screen**:
@@ -40,8 +41,9 @@
   - Auto-probes **NVIDIA NVENC**, **Intel Quick Sync (QSV)**, and **AMD AMF** GPU encoders for faster exports with automatic **CPU `libx264`** fallback.
   - Upload an optional **Background Music** track (`.mp3` / `.wav` / `.m4a`) with **auto-ducking** so music dips automatically when someone speaks, plus **Voice Loudness Boost**.
   - Toggle **Shorts / Reels / TikTok Safe-Zone Guides** directly over clip previews to verify captions and watermarks aren't covered by platform UI icons.
-- **Works With 1,000+ Sites, Batch Queue & Source Caching**:
-  - Paste single links or **Batch Queue** multiple URLs from **YouTube**, **Twitch**, **Kick**, **Facebook**, **X / Twitter**, **Instagram**, **TikTok**, **Vimeo**, **Rumble**, or upload a **Local Video** directly from your PC.
+- **Live Stream & Multi-Platform Clipping (1,000+ Sites, Batch Queue & Source Caching)**:
+  - Clip both **VODs/videos AND ongoing live streams** from **YouTube** (including `@handle/live`, `/channel/.../live`, `/live/<id>`, &amp; optional DVR from-start), **Twitch**, **Kick**, **TikTok Live**, **Facebook Live**, **Instagram**, **X / Twitter**, **Rumble**, **Bilibili**, **CHZZK**, **SOOP**, **DLive**, **Douyu**, **Huya**, **VK Video Live**, **Niconico**, **17LIVE**, **Trovo**, **Odysee**, direct **`.m3u8` / `.mpd` / `rtmp://` / `rtsp://` / `srt://`** feeds, or upload a **Local Video** directly from your PC.
+  - Click the **Live Stream** toggle next to the link field (or **Preview** a live URL) to open the **Live Stream Settings** card below the main controls — set **Live Stream Capture Window** (`30s` up to **1 Hour**), **Live Stream Mode** (`Live Now` across all platforms or `From Stream Start` DVR with automatic live-edge fallback), and **Speech Caption Accuracy**. Keep the toggle OFF for normal VOD and local clipping.
   - **Cancel** running/queued jobs anytime, **Delete** old exports from **Recent Local Exports**, optionally **Keep Downloaded Source** inside the job folder, or **Reuse Source Cache** (with per-language subtitle caching) for instant re-clips & trims.
   - Save and switch **Creator Studio Presets** in one click.
 - **Optional Local AI Boost (Ollama & LM Studio — Strictly Opt-In)**:
@@ -118,26 +120,27 @@ python run.py
 
 </details>
 
-> **Note on First Clip:** The very first time a video has no subtitles and falls back to offline transcription, the app automatically downloads and caches `faster-whisper-tiny` (~75 MB) inside `models/`. After that, everything works completely offline!
+> **Note on First Clip:** The very first time a video or live stream has no matching captions and falls back to offline transcription, the app automatically downloads and caches the selected offline Whisper model inside `models/` (`faster-whisper-base` ~139 MB for Auto/English, `faster-whisper-small` ~460 MB for Hindi/Hinglish when online, or falls back offline to `faster-whisper-tiny` ~75 MB). After caching, everything works completely offline! *(Hugging Face Hub may log a harmless `"unauthenticated requests / HF_TOKEN"` notice during the first download — no token is required.)*
 
 ---
 
 ## 🎮 How to Use It (Step-by-Step)
 
-### Option A: Auto-Clip Any YouTube, Twitch, or Stream Video
-1. **Paste a Link**: Copy any YouTube, Twitch, Kick, or Facebook video link and paste it into the link box (or click **Preview** to inspect it first).
+### Option A: Auto-Clip Any Live Stream, YouTube, Twitch, or Stream Video
+1. **Paste a Link**: Copy any video, VOD, or **live stream** link (YouTube `@handle/live`, Twitch channel, Kick channel, TikTok Live, Facebook Live, CHZZK, SOOP, Bilibili, `.m3u8`, `rtmp://`, etc.) and paste it into the link box (or click **Preview** to inspect live status, DVR support &amp; captions first).
+   - *Clipping a live stream?* Click the **Live Stream** toggle button right after the link field (or click **Preview** on a live link) to reveal the **Live Stream Settings** card below the main controls — choose your **Live Stream Capture Window** (`30s`–`1 Hour`, default `2 min`), **Live Stream Mode** (`Live Now` or `From Stream Start` DVR if supported), and **Speech Caption Accuracy**. Leave the toggle OFF for normal VOD/local clipping!
    - *Don't want to paste a link?* Click **Local Video** next to Preview to pick a video already saved on your computer!
 2. **Choose How Many Clips**: Use the **− / +** buttons (or click **1**, **3**, or **5**) to choose how many clips you want.
 3. **Choose Format & Captions**:
-   - **Clip Format**: Pick `9:16 Shorts`, `9:16 Blur` (great for tutorials), or `16:9 Wide`.
+   - **Clip Format**: Pick `9:16 Shorts`, `9:16 Blur` (great for tutorials), `Split 50/50`, or `16:9 Wide`, plus toggle **Auto Hook Clip** (~3s teaser).
    - **Highlighted Captions**: Keep **Word Highlight ON**, pick your highlight color (Yellow, Cyan, Lime, or Coral), and pick your **Caption Language** (`Auto`, `English`, `Hindi`, or `Hinglish`).
 4. **Optional — Streamer Cam Frame (PiP)**:
    - Clipping a gaming stream or reaction video? Under **Detect Real Human Face From**, pick **`Auto-Detect Real Face (Anywhere — Recommended)`** — or choose a specific area (`Top-Left`, `Top-Right`, `Bottom-Left`, `Bottom-Right`, `Top-Center`, `Bottom-Center`, `Mid-Left`, `Mid-Right`, or `Center`) — then pick which corner under **Place Cam Frame In**!
-5. **Click the Big Yellow Button**: Click **Pick Best Moments & Generate Clips**. Live progress and generated clips appear directly underneath!
+5. **Click the Big Yellow Button**: Click **Pick Best Moments & Generate Clips**. Live progress (including live capture elapsed timer) and generated clips appear directly underneath!
 6. **Preview, Copy & Download**:
-   - Watch your clips directly in the browser.
+   - Watch your clips directly in the browser, toggle **Safe Zones**, or click **✂ Trim & Edit Captions** on any clip to fine-tune boundaries or fix wording.
    - Switch between **YouTube** and **Facebook** inside **Upload Copy Kit** and click **Copy Full Post** to copy the title, caption, and hashtags in one click.
-   - Click **Download MP4**, **Download .SRT**, or **Download All (.ZIP)** at the top!
+   - Click **Download MP4**, **Download .SRT**, or use the top-right **Download All (.ZIP)** and **Open Output Folder** buttons!
 
 ---
 
@@ -173,10 +176,10 @@ You do **not** always need to sign in — many videos work immediately without l
 ├── app/
 │   ├── main.py             # FastAPI server, API routes, favicon, ZIP export & SSE stream
 │   ├── pipeline.py         # Job manager, single-fetch orchestration & saved history
-│   ├── youtube_service.py  # Multi-platform yt-dlp fetcher & json3/vtt subtitle parsers
+│   ├── youtube_service.py  # Multi-platform VOD & live-stream capture + subtitle parsers
 │   ├── youtube_auth.py     # 1-click isolated YouTube sign-in & cookie exporter
 │   ├── moment_detector.py  # 100% Zero-AI highlight ranker (heatmap + audio DSP + hooks)
-│   ├── caption_engine.py   # Word-sync engine, Hinglish transliterator & ASS karaoke builder
+│   ├── caption_engine.py   # Multi-model Whisper, EN/HI/Hinglish sync & ASS karaoke builder
 │   ├── face_tracker.py     # Offline CPU YuNet real-human face tracker & box detector
 │   ├── video_renderer.py   # FFmpeg reframer, edge-to-edge Cam Frame PiP & caption burner
 │   ├── social_suggester.py # Zero-AI Title, Caption (with Creator Credit) & Hashtag generator

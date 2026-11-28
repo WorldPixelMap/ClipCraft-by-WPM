@@ -49,6 +49,7 @@ const state = {
   bgMusicId: "",
   localAiInfo: { available: false, ollama: { available: false, models: [] }, lmstudio: { available: false, models: [] }, models: [] },
   donateAmount: "5",
+  liveSettingsOpen: false,
   eventSource: null,
   ytAuthTimer: null,
   queueTimer: null,
@@ -105,6 +106,18 @@ function showError(msg) {
 
 function clearError() {
   $("errorBanner").classList.add("hidden");
+}
+
+function setLiveSettingsVisible(visible) {
+  const show = Boolean(visible);
+  state.liveSettingsOpen = show;
+  const card = $("liveStreamCard");
+  const btn = $("liveSettingsToggleBtn");
+  if (card) card.classList.toggle("hidden", !show);
+  if (btn) {
+    btn.classList.toggle("active", show);
+    btn.setAttribute("aria-pressed", show ? "true" : "false");
+  }
 }
 
 function updateCookiesBadge(loaded) {
@@ -286,12 +299,15 @@ function captureCurrentPreset() {
     camTarget: state.camTarget,
     splitCamPosition: state.splitCamPosition,
     captionMode: $("captionModeSelect").value,
+    speechModel: $("speechModelSelect")?.value || "auto",
     clipDuration: $("clipDurSelect").value,
     quality: $("qualitySelect").value,
     watermark: $("watermarkInput").value.trim(),
     hookBanner: $("hookBannerInput").value.trim(),
     autoHook: $("autoHookToggle").checked,
     encoderMode: $("encoderModeSelect").value,
+    liveCaptureSeconds: $("liveCaptureSelect")?.value || "120",
+    liveMode: $("liveModeSelect")?.value || "live",
     musicVolume: $("musicVolumeInput").value,
     audioBoost: $("audioBoostToggle").checked,
     trimSilence: $("trimSilenceToggle").checked,
@@ -317,12 +333,15 @@ const DEFAULT_PRESET = {
   camTarget: "top-right",
   splitCamPosition: "top",
   captionMode: "auto",
+  speechModel: "auto",
   clipDuration: "35",
   quality: "720p",
   watermark: "",
   hookBanner: "",
   autoHook: true,
   encoderMode: "auto",
+  liveCaptureSeconds: "120",
+  liveMode: "live",
   musicVolume: "14",
   audioBoost: true,
   trimSilence: false,
@@ -364,6 +383,7 @@ function applyPreset(p) {
   state.splitCamPosition = cfg.splitCamPosition || "top";
   setActiveSeg("#splitPosGroup", "splitpos", state.splitCamPosition);
   $("captionModeSelect").value = cfg.captionMode;
+  if ($("speechModelSelect")) $("speechModelSelect").value = cfg.speechModel || "auto";
   $("clipDurSelect").value = String(cfg.clipDuration);
   $("qualitySelect").value = cfg.quality;
   $("watermarkInput").value = cfg.watermark || "";
@@ -376,6 +396,8 @@ function applyPreset(p) {
     }
   }
   $("encoderModeSelect").value = cfg.encoderMode || "auto";
+  if ($("liveCaptureSelect")) $("liveCaptureSelect").value = String(cfg.liveCaptureSeconds || "120");
+  if ($("liveModeSelect")) $("liveModeSelect").value = cfg.liveMode || "live";
   $("musicVolumeInput").value = String(cfg.musicVolume || "14");
   $("musicVolVal").textContent = `${$("musicVolumeInput").value}%`;
   $("audioBoostToggle").checked = Boolean(cfg.audioBoost);
@@ -472,7 +494,7 @@ async function checkHealth() {
     const pill = $("offlineModelPill");
     if (data.offline_model_cached) {
       pill.classList.add("pill-good");
-      pill.innerHTML = `<span class="dot"></span>Offline Whisper-Tiny Ready`;
+      pill.innerHTML = `<span class="dot"></span>Offline Whisper Ready`;
     } else {
       pill.innerHTML = `<span class="dot"></span>Offline Model Auto-Caches on Fallback`;
     }
@@ -636,16 +658,29 @@ async function inspectUrl() {
 
     $("previewThumb").src = data.thumbnail || "";
     $("previewTitle").textContent = data.title;
-    $("previewSub").textContent = `${data.platform} • ${data.channel} • Duration ${fmtTime(data.duration)}`;
+    if (data.is_live) {
+      const elapsedTxt = data.duration > 0 ? ` • Elapsed ${fmtTime(data.duration)}` : "";
+      $("previewSub").textContent = `${data.platform} • ${data.channel} • Live Stream${elapsedTxt}`;
+    } else {
+      $("previewSub").textContent = `${data.platform} • ${data.channel} • Duration ${fmtTime(data.duration)}`;
+    }
 
-    const badges = [`<span class="mini-badge">${escapeHtml(data.platform)}</span>`];
+    const badges = [];
+    if (data.is_live) {
+      badges.push(`<span class="mini-badge live-badge">● LIVE NOW</span>`);
+      setLiveSettingsVisible(true);
+    }
+    badges.push(`<span class="mini-badge">${escapeHtml(data.platform)}</span>`);
+    if (data.supports_dvr_from_start) {
+      badges.push(`<span class="mini-badge">DVR From-Start Supported</span>`);
+    }
     if (data.has_heatmap) {
       badges.push(`<span class="mini-badge">Heatmap Detected (${data.heatmap_points} pts)</span>`);
     }
     if (data.has_captions) {
       badges.push(`<span class="mini-badge">Zero-AI Captions (${data.caption_languages.slice(0, 2).join(", ")})</span>`);
     } else {
-      badges.push(`<span class="mini-badge">Offline Whisper-Tiny Ready for Captions</span>`);
+      badges.push(`<span class="mini-badge">Offline Whisper Ready for Captions</span>`);
     }
     $("previewBadges").innerHTML = badges.join("");
     $("videoPreview").classList.remove("hidden");
@@ -666,7 +701,7 @@ function captionSourceLabel(src) {
     case "custom_script_paced":
       return "Custom Script Sync (Zero AI)";
     case "offline_whisper_tiny":
-      return "Inbuilt Offline Whisper-Tiny";
+      return "Inbuilt Offline Whisper";
     case "edited_manual":
       return "Edited Captions";
     default:
@@ -1007,6 +1042,7 @@ function buildClipRequestPayload(url) {
     caption_position: $("captionPosSelect").value,
     caption_scale: Number($("captionScaleSelect").value || 1.0),
     caption_mode: $("captionModeSelect").value,
+    speech_model: $("speechModelSelect")?.value || "auto",
     clip_duration: Number($("clipDurSelect").value),
     quality: $("qualitySelect").value,
     manual_start: parseTimeInput($("manualStartInput").value),
@@ -1022,6 +1058,8 @@ function buildClipRequestPayload(url) {
     keep_source: $("keepSourceToggle").checked,
     use_source_cache: $("useSourceCacheToggle").checked,
     encoder_mode: $("encoderModeSelect").value,
+    live_capture_seconds: Number($("liveCaptureSelect")?.value || 120),
+    live_from_start: ($("liveModeSelect")?.value || "live") === "dvr",
     music_volume: Number($("musicVolumeInput").value || 14) / 100.0,
     bg_music_id: state.bgMusicId || "",
     ai_provider: $("aiProviderSelect").value || "auto",
@@ -1142,6 +1180,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   $("inspectBtn").addEventListener("click", inspectUrl);
+
+  if ($("liveSettingsToggleBtn")) {
+    $("liveSettingsToggleBtn").addEventListener("click", () => {
+      setLiveSettingsVisible(!state.liveSettingsOpen);
+    });
+  }
 
   $("decClips").addEventListener("click", () => setClipCount(state.numClips - 1));
   $("incClips").addEventListener("click", () => setClipCount(state.numClips + 1));
@@ -1401,6 +1445,7 @@ document.addEventListener("DOMContentLoaded", () => {
         fd.append("caption_position", $("captionPosSelect").value);
         fd.append("caption_scale", $("captionScaleSelect").value);
         fd.append("caption_mode", $("captionModeSelect").value);
+        fd.append("speech_model", $("speechModelSelect")?.value || "auto");
         fd.append("clip_duration", $("clipDurSelect").value);
         fd.append("quality", $("qualitySelect").value);
         if (mStart !== null) fd.append("manual_start", String(mStart));

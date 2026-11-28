@@ -454,6 +454,16 @@ def suggest_social_metadata(
         raw_tags.extend(["#Twitch", "#TwitchClips", "#GamingClips"])
     elif platform == "Kick":
         raw_tags.extend(["#Kick", "#KickClips", "#StreamHighlights"])
+    elif platform == "TikTok":
+        raw_tags.extend(["#TikTokLive", "#LiveClips", "#Shorts"])
+    elif platform == "Facebook":
+        raw_tags.extend(["#FacebookLive", "#FacebookReels", "#StreamHighlights"])
+    elif platform == "Rumble":
+        raw_tags.extend(["#Rumble", "#LiveClips", "#Shorts"])
+    elif platform in {"CHZZK", "SOOP", "Bilibili", "Douyu", "Huya", "DLive", "VK", "VK Play Live", "VK Video Live", "Niconico", "17LIVE", "Trovo"}:
+        raw_tags.extend([f"#{re.sub(r'[^A-Za-z0-9]', '', platform)}", "#LiveStream", "#StreamHighlights"])
+    elif platform in {"Direct Stream", "Streaming Video"}:
+        raw_tags.extend(["#LiveStream", "#StreamHighlights", "#Shorts"])
     else:
         raw_tags.extend(["#Shorts", "#YouTubeShorts", "#Reels"])
 

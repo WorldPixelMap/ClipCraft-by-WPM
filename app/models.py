@@ -67,6 +67,13 @@ class CaptionLanguage(str, Enum):
     HINGLISH = "hinglish"
 
 
+class SpeechModelPreset(str, Enum):
+    AUTO = "auto"
+    TINY = "tiny"
+    BASE = "base"
+    SMALL = "small"
+
+
 class CornerPosition(str, Enum):
     OFF = "off"
     AUTO = "auto"
@@ -103,6 +110,9 @@ class InspectResponse(BaseModel):
     caption_languages: list[str] = Field(default_factory=list)
     has_captions: bool = False
     recommended_max_clips: int = 10
+    is_live: bool = False
+    live_status: str = ""
+    supports_dvr_from_start: bool = False
 
 
 class ClipRequest(BaseModel):
@@ -116,8 +126,11 @@ class ClipRequest(BaseModel):
     caption_position: CaptionPosition = Field(default=CaptionPosition.BOTTOM)
     caption_scale: float = Field(default=1.0, ge=0.75, le=1.4)
     caption_mode: CaptionEngineMode = Field(default=CaptionEngineMode.AUTO)
+    speech_model: SpeechModelPreset = Field(default=SpeechModelPreset.AUTO)
     quality: QualityPreset = Field(default=QualityPreset.FAST)
     clip_duration: int = Field(default=35, ge=10, le=90)
+    live_capture_seconds: int = Field(default=120, ge=20, le=3600)
+    live_from_start: bool = Field(default=False)
     manual_start: float | None = Field(default=None, ge=0.0)
     manual_end: float | None = Field(default=None, gt=0.0)
     trim_silence: bool = Field(default=False)
@@ -237,6 +250,7 @@ class JobStatus(BaseModel):
     source_video_url: str | None = None
     source_kept: bool = False
     used_cache: bool = False
+    is_live_capture: bool = False
     encoder_used: str = "libx264"
     request_options: dict | None = None
     clips: list[GeneratedClip] = Field(default_factory=list)

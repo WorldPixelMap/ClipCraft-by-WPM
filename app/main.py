@@ -32,6 +32,7 @@ from app.models import (
     JobStatus,
     LocalAiProvider,
     QualityPreset,
+    SpeechModelPreset,
     SplitCamPosition,
 )
 from app.ollama_service import check_lmstudio_status, check_local_ai_status, check_ollama_status
@@ -104,7 +105,22 @@ def health_check() -> dict:
         "source_cache_count": count_cached_sources(),
         "offline_model_name": "faster-whisper-tiny (int8 CPU)",
         "moment_engine": "Zero-AI Deterministic (Heatmap + Audio DSP + Transcript Heuristics)",
-        "supported_platforms": ["YouTube", "Twitch", "Kick", "Facebook", "X / Twitter", "Vimeo", "Rumble", "1000+ yt-dlp sites"],
+        "supported_platforms": [
+            "YouTube (VOD & Live)",
+            "Twitch (VOD & Live)",
+            "Kick (VOD & Live)",
+            "TikTok Live",
+            "Facebook (VOD & Live)",
+            "Instagram",
+            "X / Twitter",
+            "Rumble",
+            "Bilibili",
+            "CHZZK",
+            "SOOP",
+            "DLive",
+            "Direct HLS/RTMP",
+            "1000+ yt-dlp sites",
+        ],
     }
 
 
@@ -212,7 +228,11 @@ def inspect_source_video(req: InspectRequest) -> InspectResponse:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    max_clips = max(1, min(10, int(info.duration // 12) or 1))
+    max_clips = (
+        10
+        if (info.is_live and info.duration <= 0)
+        else max(1, min(10, int(info.duration // 12) or 1))
+    )
     return InspectResponse(
         video_id=info.video_id,
         platform=info.platform,
@@ -225,6 +245,9 @@ def inspect_source_video(req: InspectRequest) -> InspectResponse:
         caption_languages=info.caption_languages,
         has_captions=len(info.caption_languages) > 0,
         recommended_max_clips=max_clips,
+        is_live=info.is_live,
+        live_status=info.live_status,
+        supports_dvr_from_start=info.supports_dvr_from_start,
     )
 
 
@@ -251,6 +274,7 @@ async def create_local_clip_job(
     caption_position: CaptionPosition = Form(default=CaptionPosition.BOTTOM),
     caption_scale: float = Form(default=1.0),
     caption_mode: CaptionEngineMode = Form(default=CaptionEngineMode.AUTO),
+    speech_model: SpeechModelPreset = Form(default=SpeechModelPreset.AUTO),
     quality: QualityPreset = Form(default=QualityPreset.FAST),
     clip_duration: int = Form(default=35),
     manual_start: float | None = Form(default=None),
@@ -299,6 +323,7 @@ async def create_local_clip_job(
         caption_position=caption_position,
         caption_scale=max(0.75, min(1.4, caption_scale)),
         caption_mode=caption_mode,
+        speech_model=speech_model,
         quality=quality,
         clip_duration=max(10, min(90, clip_duration)),
         manual_start=manual_start,

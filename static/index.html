@@ -6,7 +6,7 @@
   <title>Local ClipCraft by WPM — Offline-First Stream &amp; Video Clipper</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="shortcut icon" type="image/png" href="/favicon.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=4.4" />
+  <link rel="stylesheet" href="/static/styles.css?v=4.8" />
 </head>
 <body>
   <div class="app-shell">
@@ -19,7 +19,7 @@
         </div>
         <div>
           <span class="brand-name">Local ClipCraft by WPM</span>
-          <span class="brand-tag">YouTube • Twitch • Kick • Facebook • Offline-First</span>
+          <span class="brand-tag">YouTube • Twitch • Kick • TikTok • Facebook • Live &amp; VOD</span>
         </div>
       </div>
       <div class="status-pills" id="systemPills">
@@ -39,8 +39,8 @@
         <div class="hero-header">
           <div class="hero-title-row">
             <div>
-              <h1>Turn YouTube, Twitch &amp; stream links into ready-to-post clips</h1>
-              <p>Zero cloud AI by default. Paste a video link (or batch queue), choose clip format, caption style &amp; language (English / Hindi / Hinglish), and optional streamer cam — get ready-to-post clips locally.</p>
+              <h1>Turn YouTube, Twitch, Kick &amp; live streams into ready-to-post clips</h1>
+              <p>Zero cloud AI by default. Paste any video, VOD, or live stream link (YouTube, Twitch, Kick, TikTok Live, Facebook, X, .m3u8), choose clip format, caption style &amp; language (English / Hindi / Hinglish), and optional streamer cam — get ready-to-post clips locally.</p>
             </div>
             <div class="profile-bar">
               <label for="profileSelect" class="profile-label">Preset</label>
@@ -69,11 +69,15 @@
               <input
                 type="url"
                 id="urlInput"
-                placeholder="Paste YouTube, Twitch, Kick, Facebook, X, or video link..."
+                placeholder="Paste video, VOD, or live stream link (YouTube, Twitch, Kick, TikTok, Facebook, X, .m3u8)..."
                 autocomplete="off"
               />
               <button type="button" class="btn-ghost btn-sm" id="pasteBtn" title="Paste from clipboard">Paste</button>
             </div>
+            <button type="button" class="btn-secondary btn-live-toggle" id="liveSettingsToggleBtn" aria-pressed="false" title="Toggle Live Stream Settings">
+              <span class="live-toggle-dot" aria-hidden="true"></span>
+              <span>Live Stream</span>
+            </button>
             <button type="button" class="btn-secondary" id="inspectBtn">Preview</button>
             <button type="button" class="btn-secondary" id="pickLocalBtn" title="Clip a video file already on your PC">Local Video</button>
             <button type="button" class="btn-secondary" id="batchQueueToggleBtn" title="Queue multiple video links at once">Batch Queue</button>
@@ -82,7 +86,7 @@
 
           <div class="batch-box hidden" id="batchBox">
             <label for="batchUrlsInput">Batch Links (one URL per line — uses your current studio settings below)</label>
-            <textarea id="batchUrlsInput" rows="3" placeholder="https://www.youtube.com/watch?v=...&#10;https://www.twitch.tv/videos/..."></textarea>
+            <textarea id="batchUrlsInput" rows="3" placeholder="https://www.youtube.com/watch?v=...&#10;https://www.twitch.tv/streamer&#10;https://kick.com/streamer"></textarea>
             <div class="batch-actions">
               <button type="button" class="btn-secondary btn-xs" id="submitBatchBtn">Add All Links to Queue</button>
               <button type="button" class="btn-ghost btn-xs" id="cancelBatchBtn">Close</button>
@@ -246,6 +250,49 @@
                   <div class="pip-box top-right hidden" id="pipBox">CAM</div>
                   <span class="pip-cap-bar cap-bottom" id="pipCapBar">CAPTIONS</span>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Dedicated Live Stream & Speech Accuracy Card (Shown when Live Stream toggle is ON) -->
+          <div class="control-box live-stream-card hidden" id="liveStreamCard">
+            <div class="live-card-head">
+              <div class="live-card-title-wrap">
+                <span class="live-dot-pill">● LIVE</span>
+                <label class="control-label live-card-label" for="liveCaptureSelect">Live Stream Settings</label>
+              </div>
+              <span class="live-card-hint">Captures active live streams (YouTube, Twitch, Kick, TikTok, Facebook, X, CHZZK, .m3u8) up to 1 Hour</span>
+            </div>
+            <div class="live-card-grid">
+              <div class="pip-mini-field">
+                <span class="mini-label">Live Stream Capture Window</span>
+                <select id="liveCaptureSelect">
+                  <option value="30">30s (Quick Live Clip)</option>
+                  <option value="60">1 min (60s Live Window)</option>
+                  <option value="120" selected>2 min (120s — Default)</option>
+                  <option value="300">5 min (300s Live Window)</option>
+                  <option value="600">10 min (600s Live Window)</option>
+                  <option value="900">15 min (900s Live Window)</option>
+                  <option value="1800">30 min (1800s Live Window)</option>
+                  <option value="2700">45 min (2700s Live Window)</option>
+                  <option value="3600">1 Hour (3600s Max)</option>
+                </select>
+              </div>
+              <div class="pip-mini-field">
+                <span class="mini-label">Live Stream Mode</span>
+                <select id="liveModeSelect">
+                  <option value="live" selected>Live Now (Real-Time — All Platforms)</option>
+                  <option value="dvr">From Stream Start (DVR if supported)</option>
+                </select>
+              </div>
+              <div class="pip-mini-field">
+                <span class="mini-label">Speech Caption Accuracy (Live &amp; Offline)</span>
+                <select id="speechModelSelect">
+                  <option value="auto" selected>Auto (Smart High Accuracy — EN / HI / Hinglish)</option>
+                  <option value="small">Ultra Accurate (Small — Best Hindi/Hinglish)</option>
+                  <option value="base">Balanced (Base — Fast &amp; Accurate)</option>
+                  <option value="tiny">Lightweight (Tiny — Minimal PC)</option>
+                </select>
               </div>
             </div>
           </div>
@@ -717,6 +764,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=4.4"></script>
+  <script src="/static/app.js?v=4.8"></script>
 </body>
 </html>
