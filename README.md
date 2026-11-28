@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="favicon.png" alt="Local ClipCraft by WPM Logo" width="84" height="84" />
+  <img src="logo.png" alt="Local ClipCraft by WPM Logo" width="84" height="84" />
   <h1>Local ClipCraft by WPM</h1>
   <p>
     <strong>Turn long YouTube, Twitch, Kick &amp; Facebook videos into viral short clips with word-by-word highlighted captions — 100% locally on your own computer!</strong>
@@ -194,7 +194,8 @@ You do **not** always need to sign in — many videos work immediately without l
 ├── run.py                  # Cross-platform Python entrypoint (python run.py)
 ├── requirements.txt        # Python dependencies
 ├── pyproject.toml          # Project configuration
-├── favicon.png             # Project icon
+├── logo.png                # Project icon
+├── favicon.png             # World Pixel Map icon & browser favicon
 └── LICENSE                 # Proprietary Use-Only License
 ```
 
