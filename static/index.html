@@ -6,7 +6,7 @@
   <title>Local ClipCraft by WPM — Offline-First Stream &amp; Video Clipper</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="shortcut icon" type="image/png" href="/favicon.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=3.5" />
+  <link rel="stylesheet" href="/static/styles.css?v=4.2" />
 </head>
 <body>
   <div class="app-shell">
@@ -37,8 +37,25 @@
     <main class="main-content">
       <section class="hero-card">
         <div class="hero-header">
-          <h1>Turn YouTube, Twitch &amp; stream links into ready-to-post clips</h1>
-          <p>Zero cloud AI. Paste a video or VOD link, choose your clip count, caption language (English / Hindi / Hinglish), and optional streamer corner frame — get clips with suggested titles, captions &amp; hashtags.</p>
+          <div class="hero-title-row">
+            <div>
+              <h1>Turn YouTube, Twitch &amp; stream links into ready-to-post clips</h1>
+              <p>Zero cloud AI by default. Paste a video link (or batch queue), choose clip format, caption style &amp; language (English / Hindi / Hinglish), and optional streamer cam — get ready-to-post clips locally.</p>
+            </div>
+            <div class="profile-bar">
+              <label for="profileSelect" class="profile-label">Preset</label>
+              <select id="profileSelect" title="Switch saved creator preset">
+                <option value="__default__">Default Studio</option>
+              </select>
+              <button type="button" class="btn-secondary btn-xs" id="saveProfileBtn">Save Preset</button>
+              <button type="button" class="btn-ghost-danger btn-xs hidden" id="deleteProfileBtn">Delete</button>
+            </div>
+          </div>
+          <div class="profile-save-box hidden" id="profileSaveBox">
+            <input type="text" id="profileNameInput" maxlength="32" placeholder="Preset name (e.g. Gaming Hinglish Shorts)" />
+            <button type="button" class="btn-secondary btn-xs" id="confirmSaveProfileBtn">Save</button>
+            <button type="button" class="btn-ghost btn-xs" id="cancelSaveProfileBtn">Cancel</button>
+          </div>
         </div>
 
         <form id="clipForm" class="clip-form">
@@ -59,7 +76,17 @@
             </div>
             <button type="button" class="btn-secondary" id="inspectBtn">Preview</button>
             <button type="button" class="btn-secondary" id="pickLocalBtn" title="Clip a video file already on your PC">Local Video</button>
+            <button type="button" class="btn-secondary" id="batchQueueToggleBtn" title="Queue multiple video links at once">Batch Queue</button>
             <input type="file" id="localFileInput" accept=".mp4,.mkv,.webm,.mov,.m4v,.avi" class="hidden" />
+          </div>
+
+          <div class="batch-box hidden" id="batchBox">
+            <label for="batchUrlsInput">Batch Links (one URL per line — uses your current studio settings below)</label>
+            <textarea id="batchUrlsInput" rows="3" placeholder="https://www.youtube.com/watch?v=...&#10;https://www.twitch.tv/videos/..."></textarea>
+            <div class="batch-actions">
+              <button type="button" class="btn-secondary btn-xs" id="submitBatchBtn">Add All Links to Queue</button>
+              <button type="button" class="btn-ghost btn-xs" id="cancelBatchBtn">Close</button>
+            </div>
           </div>
 
           <div class="local-file-bar hidden" id="localFileBar">
@@ -106,11 +133,12 @@
               <div class="seg-group" id="aspectGroup">
                 <button type="button" class="seg-btn active" data-aspect="9:16">9:16 Shorts</button>
                 <button type="button" class="seg-btn" data-aspect="9:16-fit">9:16 Blur</button>
+                <button type="button" class="seg-btn" data-aspect="split">Split 50/50</button>
                 <button type="button" class="seg-btn" data-aspect="16:9">16:9 Wide</button>
               </div>
             </div>
 
-            <!-- Highlighted Captions + Language -->
+            <!-- Highlighted Captions + Language + Style -->
             <div class="control-box">
               <label class="control-label">Highlighted Captions</label>
               <div class="caption-bar">
@@ -133,6 +161,34 @@
                 <button type="button" class="seg-btn" data-lang="en">English</button>
                 <button type="button" class="seg-btn" data-lang="hi">Hindi (हिंदी)</button>
                 <button type="button" class="seg-btn" data-lang="hinglish">Hinglish</button>
+              </div>
+
+              <div class="cap-style-row">
+                <div class="pip-mini-field">
+                  <span class="mini-label">Style</span>
+                  <select id="captionStyleSelect">
+                    <option value="classic" selected>Classic Outline</option>
+                    <option value="boxed">Boxed Pill</option>
+                    <option value="pop">Pop (1–2 Words)</option>
+                    <option value="minimal">Clean Minimal</option>
+                  </select>
+                </div>
+                <div class="pip-mini-field">
+                  <span class="mini-label">Position</span>
+                  <select id="captionPosSelect">
+                    <option value="bottom" selected>Bottom</option>
+                    <option value="center">Center</option>
+                    <option value="top">Top</option>
+                  </select>
+                </div>
+                <div class="pip-mini-field">
+                  <span class="mini-label">Size</span>
+                  <select id="captionScaleSelect">
+                    <option value="0.85">Compact</option>
+                    <option value="1.0" selected>Standard</option>
+                    <option value="1.2">Large</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -166,11 +222,20 @@
                       <button type="button" class="corner-btn" data-corner="bottom-right">Bot-Right</button>
                     </div>
                   </div>
+                  <div class="pip-mini-field hidden" id="splitPosWrap">
+                    <span class="mini-label">Place Streamer Face In (Split 50/50)</span>
+                    <div class="seg-group" id="splitPosGroup">
+                      <button type="button" class="seg-btn active" data-splitpos="top">Up Part (Top 50%)</button>
+                      <button type="button" class="seg-btn" data-splitpos="bottom">Down Part (Bottom 50%)</button>
+                    </div>
+                  </div>
                   <div class="pip-status-line" id="pipStatusLine">Cam Frame Off</div>
                 </div>
-                <div class="pip-diagram" id="pipDiagram" title="Preview of streamer tiny frame position">
+                <div class="pip-diagram" id="pipDiagram" title="Preview of cam frame &amp; caption position">
+                  <div class="pip-split-cam hidden" id="pipSplitCam">CAM</div>
+                  <div class="pip-split-line hidden" id="pipSplitLine"></div>
                   <div class="pip-box top-right hidden" id="pipBox">CAM</div>
-                  <span class="pip-cap-bar">CAPTIONS</span>
+                  <span class="pip-cap-bar cap-bottom" id="pipCapBar">CAPTIONS</span>
                 </div>
               </div>
             </div>
@@ -186,10 +251,10 @@
             </summary>
 
             <div class="adv-sections">
-              <!-- Panel 1: Processing, Quality & Audio -->
+              <!-- Panel 1: Processing, Trimming, Audio & GPU -->
               <div class="adv-panel">
                 <div class="adv-panel-head">
-                  <span class="control-label adv-panel-title">Processing &amp; Output Settings</span>
+                  <span class="control-label adv-panel-title">Processing, Trimming &amp; Output Settings</span>
                 </div>
                 <div class="adv-settings-grid">
                   <div class="adv-field">
@@ -219,21 +284,133 @@
                     <label for="watermarkInput">Channel Watermark (Optional)</label>
                     <input type="text" id="watermarkInput" maxlength="32" placeholder="@YourHandle" />
                   </div>
+                  <div class="adv-field">
+                    <label for="manualStartInput">Manual Start Time (Optional)</label>
+                    <input type="text" id="manualStartInput" maxlength="16" placeholder="e.g. 1:25 or 85" />
+                  </div>
+                  <div class="adv-field">
+                    <label for="manualEndInput">Manual End Time (Optional)</label>
+                    <input type="text" id="manualEndInput" maxlength="16" placeholder="e.g. 2:00 or 120" />
+                  </div>
+                  <div class="adv-field">
+                    <label for="hookBannerInput">Top Hook Banner (First 4s, Opt.)</label>
+                    <input type="text" id="hookBannerInput" maxlength="80" placeholder="WAIT FOR THE ENDING!" />
+                  </div>
+                  <div class="adv-field">
+                    <label for="encoderModeSelect">Video Encoder (GPU / CPU)</label>
+                    <select id="encoderModeSelect">
+                      <option value="auto" selected>Auto (Best GPU or CPU)</option>
+                      <option value="cpu">CPU (libx264 Compatible)</option>
+                      <option value="nvenc">NVIDIA NVENC (Fast GPU)</option>
+                      <option value="qsv">Intel Quick Sync (QSV)</option>
+                      <option value="amf">AMD AMF (Fast GPU)</option>
+                    </select>
+                  </div>
                 </div>
 
-                <div class="adv-switch-row">
-                  <label class="adv-switch-info" for="audioBoostToggle">
-                    <span class="adv-switch-title">Voice Loudness Boost</span>
-                    <span class="adv-switch-desc">Applies fast 1-pass loudness normalization for clearer, punchier speech.</span>
-                  </label>
-                  <label class="switch" aria-label="Voice Loudness Boost">
-                    <input type="checkbox" id="audioBoostToggle" checked />
-                    <span class="slider"></span>
-                  </label>
+                <!-- Optional Background Music + Auto-Ducking -->
+                <div class="music-row">
+                  <div class="music-left">
+                    <span class="adv-switch-title">Background Music (Auto-Ducks on Speech)</span>
+                    <div class="music-picker-row">
+                      <button type="button" class="btn-secondary btn-xs" id="uploadMusicBtn">Choose Audio (.mp3/.wav)</button>
+                      <input type="file" id="bgMusicInput" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac" class="hidden" />
+                      <span class="mini-status" id="musicSelectedName">None selected</span>
+                      <button type="button" class="btn-ghost btn-xs hidden" id="clearMusicBtn">Remove</button>
+                    </div>
+                  </div>
+                  <div class="music-vol-wrap">
+                    <label for="musicVolumeInput">Music Level: <strong id="musicVolVal">14%</strong></label>
+                    <input type="range" id="musicVolumeInput" min="4" max="40" value="14" step="2" />
+                  </div>
+                </div>
+
+                <div class="adv-switch-grid">
+                  <div class="adv-switch-cell">
+                    <label class="adv-switch-info" for="audioBoostToggle">
+                      <span class="adv-switch-title">Voice Loudness Boost</span>
+                      <span class="adv-switch-desc">Fast 1-pass normalization for punchy speech.</span>
+                    </label>
+                    <label class="switch" aria-label="Voice Loudness Boost">
+                      <input type="checkbox" id="audioBoostToggle" checked />
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+
+                  <div class="adv-switch-cell">
+                    <label class="adv-switch-info" for="trimSilenceToggle">
+                      <span class="adv-switch-title">Trim Long Silences (Jump-Cut)</span>
+                      <span class="adv-switch-desc">Cuts dead-air gaps &gt; 0.65s for faster pacing.</span>
+                    </label>
+                    <label class="switch" aria-label="Trim Long Silences">
+                      <input type="checkbox" id="trimSilenceToggle" />
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+
+                  <div class="adv-switch-cell">
+                    <label class="adv-switch-info" for="keepSourceToggle">
+                      <span class="adv-switch-title">Keep Downloaded Source</span>
+                      <span class="adv-switch-desc">Saves full source.mp4 inside job output folder.</span>
+                    </label>
+                    <label class="switch" aria-label="Keep Downloaded Source">
+                      <input type="checkbox" id="keepSourceToggle" />
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+
+                  <div class="adv-switch-cell">
+                    <label class="adv-switch-info" for="useSourceCacheToggle">
+                      <span class="adv-switch-title">Reuse Source Cache <button type="button" class="inline-link-btn" id="clearSourceCacheBtn">(Clear)</button></span>
+                      <span class="adv-switch-desc">Enables instant re-clips, trims &amp; caption edits.</span>
+                    </label>
+                    <label class="switch" aria-label="Reuse Source Cache">
+                      <input type="checkbox" id="useSourceCacheToggle" checked />
+                      <span class="slider"></span>
+                    </label>
+                  </div>
                 </div>
               </div>
 
-              <!-- Panel 2: YouTube Authentication & Cookies -->
+              <!-- Panel 2: Local AI Boost (Ollama & LM Studio — Strictly Opt-In) -->
+              <div class="adv-panel">
+                <div class="auth-header">
+                  <div>
+                    <span class="control-label adv-panel-title">Local AI Boost — Ollama &amp; LM Studio (Optional)</span>
+                    <p class="auth-desc">Off by default (Zero AI). Enable when Ollama (11434) or LM Studio (1234) is running locally for topic matching &amp; hook polish.</p>
+                  </div>
+                  <div class="ollama-head-right">
+                    <span id="ollamaBadge" class="auth-status-pill">Checking Local AI...</span>
+                    <button type="button" class="btn-ghost btn-xs" id="refreshLocalAiBtn" title="Re-scan Ollama &amp; LM Studio models">↻</button>
+                    <label class="switch" aria-label="Enable Local AI Boost">
+                      <input type="checkbox" id="ollamaEnabledToggle" />
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="ollama-grid">
+                  <div class="adv-field">
+                    <label for="aiProviderSelect">Local AI Provider</label>
+                    <select id="aiProviderSelect">
+                      <option value="auto" selected>Auto (Ollama &amp; LM Studio)</option>
+                      <option value="ollama">Ollama (127.0.0.1:11434)</option>
+                      <option value="lmstudio">LM Studio (127.0.0.1:1234)</option>
+                    </select>
+                  </div>
+                  <div class="adv-field">
+                    <label for="ollamaModelSelect">Local Model</label>
+                    <select id="ollamaModelSelect">
+                      <option value="">No local models detected</option>
+                    </select>
+                  </div>
+                  <div class="adv-field">
+                    <label for="ollamaTopicInput">Topic Filter (Optional — find moments about...)</label>
+                    <input type="text" id="ollamaTopicInput" maxlength="120" placeholder="e.g. pricing strategy, funny fail, clutch play" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Panel 3: YouTube Authentication & Cookies -->
               <div class="adv-panel">
                 <div class="auth-header">
                   <div>
@@ -304,6 +481,15 @@
         </form>
       </section>
 
+      <!-- Active & Queued Jobs Strip -->
+      <section class="queue-section hidden" id="queueSection">
+        <div class="queue-header">
+          <h3>Active &amp; Queued Jobs</h3>
+          <span class="history-hint">Runs sequentially on your PC — cancel anytime</span>
+        </div>
+        <div class="queue-list" id="queueList"></div>
+      </section>
+
       <!-- Live Progress Panel -->
       <section class="progress-card hidden" id="progressCard">
         <div class="progress-top">
@@ -311,7 +497,10 @@
             <span class="stage-badge" id="stageBadge">Queued</span>
             <h2 id="progressTitle">Preparing video...</h2>
           </div>
-          <span class="progress-pct" id="progressPct">0%</span>
+          <div class="progress-right">
+            <span class="progress-pct" id="progressPct">0%</span>
+            <button type="button" class="btn-ghost-danger btn-xs" id="cancelCurrentJobBtn">Cancel</button>
+          </div>
         </div>
         <div class="progress-track">
           <div class="progress-fill" id="progressFill" style="width: 0%"></div>
@@ -327,6 +516,7 @@
             <p class="ai-note" id="aiNote"></p>
           </div>
           <div class="results-actions">
+            <a class="btn-secondary hidden" id="downloadSourceBtn" href="#" download>Download Source MP4</a>
             <a class="btn-secondary" id="downloadAllBtn" href="#" download>Download All (.ZIP)</a>
             <button type="button" class="btn-secondary" id="openFolderBtn">Open Output Folder</button>
           </div>
@@ -418,6 +608,16 @@
                   <option value="1080p">1080p HD</option>
                 </select>
               </div>
+              <div class="adv-field">
+                <label for="reelHookBannerInput">Top Hook Banner (First 4s, Opt.)</label>
+                <input type="text" id="reelHookBannerInput" maxlength="80" placeholder="WATCH TILL THE END" />
+              </div>
+              <div class="adv-field adv-check-wrap">
+                <label class="check-label">
+                  <input type="checkbox" id="reelTrimSilenceToggle" />
+                  <span>Trim Long Silences (Jump-Cut)</span>
+                </label>
+              </div>
             </div>
           </details>
 
@@ -502,6 +702,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=3.5"></script>
+  <script src="/static/app.js?v=4.2"></script>
 </body>
 </html>

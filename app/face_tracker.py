@@ -12,6 +12,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+
 from app.models import CornerPosition
 from app.youtube_service import find_ffmpeg_dir
 

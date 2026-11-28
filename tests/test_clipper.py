@@ -9,24 +9,15 @@ import unittest
 from pathlib import Path
 
 from app.caption_engine import (
+    _words_match_requested_language,
+    align_edited_text_to_words,
     devanagari_to_hinglish,
     get_clip_words,
     is_offline_model_cached,
     parse_custom_script_or_srt,
+    remap_words_after_jump_cuts,
     write_highlighted_ass_and_srt,
 )
-from app.models import (
-    AspectRatio,
-    CaptionEngineMode,
-    CaptionLanguage,
-    CornerPosition,
-    HighlightColor,
-    MomentCandidate,
-    QualityPreset,
-    TranscriptSegment,
-    WordTimestamp,
-)
-from app.moment_detector import detect_best_moments
 from app.face_tracker import (
     _build_active_intervals,
     build_ffmpeg_lerp_expr,
@@ -34,11 +25,39 @@ from app.face_tracker import (
     track_corner_streamer_face,
     track_main_speaker_9_16,
 )
+from app.main import delete_job_output, get_local_ai_status, get_ollama_status, health_check, list_active_queue, wipe_source_cache
+from app.models import (
+    AspectRatio,
+    CaptionEngineMode,
+    CaptionLanguage,
+    CaptionPosition,
+    CaptionStyle,
+    ClipRequest,
+    ClipUpdateRequest,
+    CornerPosition,
+    EncoderMode,
+    HighlightColor,
+    MomentCandidate,
+    QualityPreset,
+    SplitCamPosition,
+    TranscriptSegment,
+    WordTimestamp,
+)
+from app.moment_detector import analyze_audio_signal, compute_speech_keep_intervals, detect_best_moments
+from app.ollama_service import (
+    check_lmstudio_status,
+    enhance_social_hook_with_ollama,
+    format_ai_label,
+    parse_provider_and_model,
+    score_topic_relevance,
+)
+from app.pipeline import OUTPUT_DIR, job_manager
 from app.social_suggester import suggest_social_metadata
-from app.video_renderer import _cam_source_crop, _pip_dimensions, probe_video, render_clip
+from app.video_renderer import _cam_source_crop, _pip_dimensions, detect_available_encoders, probe_video, render_clip
 from app.youtube_auth import cookies_to_netscape_text, find_chromium_browser
 from app.youtube_service import (
     _base_ydl_opts,
+    _select_caption_languages,
     find_ffmpeg_dir,
     find_node_exe,
     format_ytdlp_error,
@@ -479,6 +498,354 @@ class TestSyntheticClippingPipeline(unittest.TestCase):
         plain_words = parse_custom_script_or_srt("नमस्ते दोस्तों आज हम नया रील देखेंगे", duration=5.0, caption_language=CaptionLanguage.HINGLISH)
         self.assertEqual(len(plain_words), 7)
         self.assertEqual(plain_words[1].word.lower(), "doston")
+
+
+class TestNewFeaturesSuite(unittest.TestCase):
+    def test_caption_styles_positions_hook_banner_and_edit_alignment(self) -> None:
+        words = [
+            WordTimestamp(word="First", start=0.2, end=0.7),
+            WordTimestamp(word="second", start=0.8, end=1.4),
+            WordTimestamp(word="third", start=4.2, end=4.8),
+            WordTimestamp(word="fourth", start=4.9, end=5.5),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            ass_boxed = work / "boxed.ass"
+            write_highlighted_ass_and_srt(
+                words=words,
+                ass_path=ass_boxed,
+                srt_path=None,
+                video_w=720,
+                video_h=1280,
+                clip_duration=6.0,
+                aspect_ratio=AspectRatio.VERTICAL_CROP,
+                highlight_color=HighlightColor.CYAN,
+                caption_style=CaptionStyle.BOXED,
+                caption_position=CaptionPosition.TOP,
+                caption_scale=1.2,
+                hook_banner="WAIT FOR THIS!",
+            )
+            txt = ass_boxed.read_text(encoding="utf-8")
+            self.assertIn("Style: HookBanner", txt)
+            self.assertIn("WAIT FOR THIS!", txt)
+            self.assertIn(",8,", txt)  # Top alignment
+
+            ass_pop = work / "pop.ass"
+            write_highlighted_ass_and_srt(
+                words=words,
+                ass_path=ass_pop,
+                srt_path=None,
+                video_w=720,
+                video_h=1280,
+                clip_duration=6.0,
+                aspect_ratio=AspectRatio.VERTICAL_CROP,
+                highlight_color=HighlightColor.CORAL,
+                caption_style=CaptionStyle.POP,
+                caption_position=CaptionPosition.CENTER,
+            )
+            pop_txt = ass_pop.read_text(encoding="utf-8")
+            self.assertIn(r"\fscx118\fscy118", pop_txt)
+            self.assertIn(",5,", pop_txt)  # Center alignment
+
+        remapped = remap_words_after_jump_cuts(words, [(0.0, 1.6), (4.0, 5.7)])
+        self.assertEqual(len(remapped), 4)
+        self.assertLess(remapped[2].end, 2.8)  # 2.4s silent gap removed cleanly
+
+        edited_same = align_edited_text_to_words("One two three four", words, clip_duration=6.0)
+        self.assertEqual([w.word for w in edited_same], ["One", "two", "three", "four"])
+        self.assertEqual(edited_same[0].start, 0.2)
+
+        edited_diff = align_edited_text_to_words("One two", words, clip_duration=6.0)
+        self.assertEqual(len(edited_diff), 2)
+
+    def test_silence_jump_cuts_split_screen_music_ducking_and_gpu_probe(self) -> None:
+        encoders = detect_available_encoders()
+        self.assertIsInstance(encoders, list)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            src = work / "sil_src.mp4"
+            mus = work / "bg.wav"
+
+            # 8s clip with speech at 0..2.5s and 5.2..8s, silent gap in between
+            subprocess.run(
+                [
+                    _ffmpeg_exe(), "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=24:duration=8",
+                    "-f", "lavfi", "-i",
+                    "aevalsrc='if(lt(t,2.5)+gt(t,5.2),0.65*sin(2*PI*440*t),0.0)':s=44100:d=8",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", str(src),
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    _ffmpeg_exe(), "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=44100:duration=3",
+                    str(mus),
+                ],
+                check=True,
+            )
+
+            audio = analyze_audio_signal(src, 8.0)
+            ivs, trimmed_ratio = compute_speech_keep_intervals(audio, 0.0, 8.0)
+            self.assertGreater(len(ivs), 1)
+            self.assertGreater(trimmed_ratio, 0.15)
+
+            out_mp4 = work / "split_jc_mus.mp4"
+            out_jpg = work / "split_jc_mus.jpg"
+            src_info = probe_video(src)
+            enc_used = render_clip(
+                source_video=src,
+                src_info=src_info,
+                output_mp4=out_mp4,
+                output_thumb=out_jpg,
+                start=0.0,
+                end=8.0,
+                aspect_ratio=AspectRatio.SPLIT_SCREEN,
+                quality=QualityPreset.FAST,
+                ass_path=None,
+                work_dir=work,
+                keep_intervals=ivs,
+                encoder_mode=EncoderMode.AUTO,
+                bg_music_path=mus,
+                music_volume=0.16,
+            )
+            self.assertTrue(out_mp4.exists())
+            self.assertIn(enc_used, {"libx264", "h264_nvenc", "h264_qsv", "h264_amf"})
+            out_info = probe_video(out_mp4)
+            self.assertEqual((out_info.width, out_info.height), (720, 1280))
+            self.assertTrue(out_info.has_audio)
+            self.assertLess(out_info.duration, 7.2)
+
+    def test_pipeline_manual_trim_keep_source_update_and_delete(self) -> None:
+        import time as _time
+        import uuid
+
+        job_id = f"test_{uuid.uuid4().hex[:6]}"
+        job_dir = OUTPUT_DIR / job_id
+        work_dir = job_dir / "_work"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        local_src = work_dir / "local_source.mp4"
+        try:
+            subprocess.run(
+                [
+                    _ffmpeg_exe(), "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=24:duration=7",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=7",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", str(local_src),
+                ],
+                check=True,
+            )
+            req = ClipRequest(
+                url="https://example.com/local",
+                num_clips=1,
+                highlighted_captions=False,
+                aspect_ratio=AspectRatio.VERTICAL_FIT,
+                caption_style=CaptionStyle.BOXED,
+                caption_position=CaptionPosition.CENTER,
+                manual_start=1.0,
+                manual_end=5.0,
+                hook_banner="TEST HOOK",
+                keep_source=True,
+                use_source_cache=False,
+                encoder_mode=EncoderMode.CPU,
+            )
+            job_manager.submit_local_file_job(job_id=job_id, video_path=local_src, title="SynthTest", req=req)
+            deadline = _time.time() + 45.0
+            final = None
+            while _time.time() < deadline:
+                cur = job_manager.get_job(job_id)
+                if cur and cur.status in {"completed", "failed", "cancelled"}:
+                    final = cur
+                    break
+                _time.sleep(0.25)
+
+            self.assertIsNotNone(final)
+            self.assertEqual(final.status, "completed", msg=str(final.error))
+            self.assertTrue(final.source_kept)
+            self.assertTrue((job_dir / "source.mp4").exists())
+            self.assertEqual(len(final.clips), 1)
+            self.assertEqual(final.clips[0].start, 1.0)
+            self.assertEqual(final.clips[0].end, 5.0)
+
+            # Single-clip trim & caption re-burn update
+            updated = job_manager.update_clip(
+                job_id=job_id,
+                rank=1,
+                patch=ClipUpdateRequest(start=1.5, end=4.5, caption_text="Custom edited line"),
+            )
+            self.assertEqual(updated.start, 1.5)
+            self.assertEqual(updated.end, 4.5)
+            self.assertEqual(updated.caption_source, "edited_manual")
+            self.assertEqual([w.word for w in updated.words], ["Custom", "edited", "line"])
+
+            # API helper checks
+            h = health_check()
+            self.assertIn("available_gpu_encoders", h)
+            self.assertIn("ollama", h)
+            self.assertIsInstance(list_active_queue(), list)
+            self.assertIsInstance(get_ollama_status(), dict)
+            self.assertIsInstance(wipe_source_cache(), dict)
+        finally:
+            res = delete_job_output(job_id)
+            self.assertTrue(res["deleted"])
+            self.assertFalse(job_dir.exists())
+
+    def test_ollama_safe_fallback_and_cancel_job(self) -> None:
+        # Unreachable or non-existent model always degrades cleanly without raising
+        self.assertEqual(score_topic_relevance("", "topic", [{"preview": "hello"}]), {})
+        self.assertIsNone(enhance_social_hook_with_ollama("", "some clip text here", "Title", "YouTube"))
+        st = get_ollama_status()
+        self.assertIn("available", st)
+        self.assertIn("models", st)
+        lai = get_local_ai_status()
+        self.assertIn("ollama", lai)
+        self.assertIn("lmstudio", lai)
+
+        # Provider parsing & display label helpers
+        self.assertEqual(parse_provider_and_model("lmstudio::qwen2.5-7b-instruct", "auto"), ("lmstudio", "qwen2.5-7b-instruct"))
+        self.assertEqual(parse_provider_and_model("ollama::llama3.2", "auto"), ("ollama", "llama3.2"))
+        self.assertEqual(format_ai_label("lmstudio::qwen2.5-7b-instruct"), "LM Studio (qwen2.5-7b-instruct)")
+
+        # Mock local LM Studio OpenAI-compatible server on localhost
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading as _threading
+        from unittest.mock import patch
+
+        class _LMHandler(BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):
+                return
+
+            def do_GET(self):
+                if self.path == "/v1/models":
+                    body = json.dumps({"object": "list", "data": [{"id": "qwen2.5-7b-instruct"}]}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw_req = self.rfile.read(length).decode("utf-8")
+                if self.path == "/v1/chat/completions":
+                    if "scores" in raw_req:
+                        content = '```json\n{"scores": {"0": 0.92, "1": 0.25}}\n```'
+                    else:
+                        content = '{"title": "Stop Making This Pricing Mistake!", "hook_caption": "Most founders miss this rule."}'
+                    body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _LMHandler)
+        port = srv.server_address[1]
+        t = _threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            with patch("app.ollama_service.LMSTUDIO_BASE_URL", f"http://127.0.0.1:{port}"):
+                lm_stat = check_lmstudio_status(base_url=f"http://127.0.0.1:{port}")
+                self.assertTrue(lm_stat["available"])
+                self.assertEqual(lm_stat["models"], ["qwen2.5-7b-instruct"])
+
+                scores = score_topic_relevance(
+                    "lmstudio::qwen2.5-7b-instruct",
+                    "pricing",
+                    [{"preview": "Pricing strategy mistake"}, {"preview": "Random intro"}],
+                )
+                self.assertAlmostEqual(scores[0], 0.92, places=2)
+                polished = enhance_social_hook_with_ollama(
+                    "lmstudio::qwen2.5-7b-instruct",
+                    "Never underprice your product when launching.",
+                    "SaaS Pricing Guide",
+                    "YouTube",
+                )
+                self.assertIsNotNone(polished)
+                self.assertEqual(polished["title"], "Stop Making This Pricing Mistake!")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+        # Verify cancelling a queued job marks it cancelled cleanly
+        job = job_manager.submit_job(ClipRequest(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ"), platform="YouTube")
+        cancelled = job_manager.cancel_job(job.job_id)
+        self.assertIsNotNone(cancelled)
+        self.assertIn(cancelled.status, {"cancelled", "running"})
+        job_manager.delete_job(job.job_id)
+
+    def test_caption_language_strictness_hinglish_nukta_and_split_cam_placement(self) -> None:
+        # 1. _select_caption_languages never falls back to wrong languages
+        info_only_en = {"language": "en", "subtitles": {"en": [{}]}, "automatic_captions": {"en": [{}]}}
+        self.assertEqual(_select_caption_languages(info_only_en, CaptionLanguage.HINDI), [])
+        self.assertEqual(_select_caption_languages(info_only_en, CaptionLanguage.HINGLISH), [])
+        self.assertIn("en", _select_caption_languages(info_only_en, CaptionLanguage.ENGLISH))
+
+        info_mixed = {
+            "language": "hi",
+            "subtitles": {},
+            "automatic_captions": {"en-IN": [{}], "hi": [{}], "hi-orig": [{}], "es": [{}]},
+        }
+        self.assertEqual(_select_caption_languages(info_mixed, CaptionLanguage.HINDI)[0], "hi")
+        self.assertNotIn("en-IN", _select_caption_languages(info_mixed, CaptionLanguage.HINDI))
+        # Hinglish prefers hi before en-IN so Hindi videos don't become plain English
+        self.assertEqual(_select_caption_languages(info_mixed, CaptionLanguage.HINGLISH)[0], "hi")
+        self.assertNotIn("en-IN", _select_caption_languages(info_mixed, CaptionLanguage.HINGLISH))
+
+        # 2. Script mismatch detector + nukta Hinglish transliterator
+        en_words = [WordTimestamp(word="Hello", start=0.0, end=0.5), WordTimestamp(word="everyone", start=0.5, end=1.0)]
+        hi_words = [WordTimestamp(word="नमस्ते", start=0.0, end=0.5), WordTimestamp(word="दोस्तों", start=0.5, end=1.0)]
+        self.assertFalse(_words_match_requested_language(en_words, CaptionLanguage.HINDI))
+        self.assertTrue(_words_match_requested_language(hi_words, CaptionLanguage.HINDI))
+        self.assertFalse(_words_match_requested_language(hi_words, CaptionLanguage.ENGLISH))
+        self.assertTrue(_words_match_requested_language(en_words, CaptionLanguage.ENGLISH))
+
+        hinglish_out = devanagari_to_hinglish("यह सबसे बड़ी गलती है और मज़ा आया")
+        self.assertEqual(hinglish_out, "yeh sabse badi galti hai aur maza aaya")
+
+        # 3. Split 50/50 placement: top half vs bottom half (even with cam_source=OFF fallback crop)
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            src = work / "split_pos_src.mp4"
+            # Upper half bright red, lower half solid blue -> verify top vs bottom panel swap!
+            subprocess.run(
+                [
+                    _ffmpeg_exe(), "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=red:s=640x360:d=2",
+                    "-f", "lavfi", "-i", "color=c=blue:s=640x360:d=2",
+                    "-filter_complex", "[0:v][1:v]vstack=inputs=2[v]",
+                    "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    str(src),
+                ],
+                check=True,
+            )
+            src_info = probe_video(src)
+            out_top = work / "split_top.mp4"
+            out_bot = work / "split_bot.mp4"
+            render_clip(
+                source_video=src, src_info=src_info, output_mp4=out_top, output_thumb=work / "t1.jpg",
+                start=0.0, end=2.0, aspect_ratio=AspectRatio.SPLIT_SCREEN, quality=QualityPreset.FAST,
+                ass_path=None, work_dir=work, split_cam_position=SplitCamPosition.TOP,
+            )
+            render_clip(
+                source_video=src, src_info=src_info, output_mp4=out_bot, output_thumb=work / "t2.jpg",
+                start=0.0, end=2.0, aspect_ratio=AspectRatio.SPLIT_SCREEN, quality=QualityPreset.FAST,
+                ass_path=None, work_dir=work, split_cam_position=SplitCamPosition.BOTTOM,
+            )
+            import cv2
+            c_top = cv2.VideoCapture(str(out_top))
+            _, f_top = c_top.read()
+            c_top.release()
+            c_bot = cv2.VideoCapture(str(out_bot))
+            _, f_bot = c_bot.read()
+            c_bot.release()
+            # In out_top, upper half crops top of source (pure red -> R >> B); in out_bot, lower half has cam (pure red -> R >> B)
+            self.assertGreater(int(f_top[200, 360, 2]), int(f_top[200, 360, 0]) + 100)
+            self.assertGreater(int(f_bot[1050, 360, 2]), int(f_bot[1050, 360, 0]) + 100)
 
 
 if __name__ == "__main__":

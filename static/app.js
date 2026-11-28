@@ -1,9 +1,11 @@
 const $ = (id) => document.getElementById(id);
 
+const PROFILES_STORAGE_KEY = "clipcraft_studio_profiles_v1";
+
 const PAYPAL_CONFIG = {
   businessEmail: "hmjsarkar@gmail.com",
-  hostedButtonId: "", // Optional: set PayPal hosted_button_id to override email link
-  paypalMeHandle: "", // Optional: set PayPal.Me handle (e.g. "hmjsarkar") to use paypal.me
+  hostedButtonId: "",
+  paypalMeHandle: "",
   itemName: "Support Local ClipCraft by WPM",
   currencyCode: "USD",
 };
@@ -21,7 +23,6 @@ function buildPayPalDonateUrl(amount) {
     params.set("hosted_button_id", PAYPAL_CONFIG.hostedButtonId);
     return `https://www.paypal.com/cgi-bin/webscr?${params.toString()}`;
   }
-  // Use standard _xclick checkout (avoids "Donations aren't supported in this organisation's country" in IN/restricted regions)
   params.set("cmd", "_xclick");
   params.set("business", PAYPAL_CONFIG.businessEmail);
   params.set("item_name", PAYPAL_CONFIG.itemName);
@@ -38,15 +39,19 @@ const state = {
   captionLanguage: "auto",
   camSource: "off",
   camTarget: "top-right",
+  splitCamPosition: "top",
   currentJobId: null,
   localFile: null,
   reelFile: null,
   reelLanguage: "auto",
   reelColor: "yellow",
   reelAspect: "original",
+  bgMusicId: "",
+  localAiInfo: { available: false, ollama: { available: false, models: [] }, lmstudio: { available: false, models: [] }, models: [] },
   donateAmount: "5",
   eventSource: null,
   ytAuthTimer: null,
+  queueTimer: null,
 };
 
 function fmtTime(sec) {
@@ -56,6 +61,20 @@ function fmtTime(sec) {
   const h = Math.floor(m / 60);
   if (h > 0) return `${h}:${String(m % 60).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
   return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+}
+
+function parseTimeInput(raw) {
+  const txt = String(raw || "").trim();
+  if (!txt) return null;
+  if (/^\d+(?:\.\d+)?$/.test(txt)) {
+    const val = Number(txt);
+    return Number.isFinite(val) && val >= 0 ? val : null;
+  }
+  const parts = txt.split(":").map((p) => Number(p.trim()));
+  if (parts.some((n) => !Number.isFinite(n) || n < 0)) return null;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return null;
 }
 
 function escapeHtml(str) {
@@ -82,6 +101,10 @@ function showError(msg) {
     el.appendChild(btn);
   }
   el.classList.remove("hidden");
+}
+
+function clearError() {
+  $("errorBanner").classList.add("hidden");
 }
 
 function updateCookiesBadge(loaded) {
@@ -145,10 +168,6 @@ function pollYouTubeLogin() {
   }, 1100);
 }
 
-function clearError() {
-  $("errorBanner").classList.add("hidden");
-}
-
 function setClipCount(n) {
   const clamped = Math.max(1, Math.min(10, Number(n) || 3));
   state.numClips = clamped;
@@ -159,21 +178,58 @@ function setClipCount(n) {
   });
 }
 
+function setActiveSeg(groupSelector, attrName, value) {
+  document.querySelectorAll(`${groupSelector} .seg-btn`).forEach((b) => {
+    b.classList.toggle("active", b.dataset[attrName] === value);
+  });
+}
+
 function updatePipDiagram() {
   state.camSource = $("camSourceSelect").value || "off";
   const enabled = state.camSource !== "off";
-  $("camTargetGroup").classList.toggle("disabled", !enabled);
+  const isSplit = state.aspectRatio === "split";
+
+  $("camTargetWrap").classList.toggle("hidden", isSplit);
+  $("splitPosWrap").classList.toggle("hidden", !isSplit);
+  $("camTargetGroup").classList.toggle("disabled", !enabled || isSplit);
   document.querySelectorAll("#camTargetGroup .corner-btn").forEach((btn) => {
-    btn.disabled = !enabled;
+    btn.disabled = !enabled || isSplit;
   });
+
   const box = $("pipBox");
-  box.classList.toggle("hidden", !enabled);
-  box.classList.remove("top-left", "top-right", "bottom-left", "bottom-right");
-  box.classList.add(state.camTarget);
+  const splitLine = $("pipSplitLine");
+  const splitCam = $("pipSplitCam");
+  if (splitLine) splitLine.classList.toggle("hidden", !isSplit);
+  if (splitCam) {
+    splitCam.classList.toggle("hidden", !isSplit);
+    splitCam.classList.toggle("split-bottom", state.splitCamPosition === "bottom");
+  }
+
+  if (isSplit) {
+    box.classList.add("hidden");
+  } else {
+    box.classList.toggle("hidden", !enabled);
+    box.classList.remove("top-left", "top-right", "bottom-left", "bottom-right");
+    box.classList.add(state.camTarget);
+  }
+
+  const capBar = $("pipCapBar");
+  if (capBar) {
+    const pos = $("captionPosSelect")?.value || "bottom";
+    capBar.classList.remove("cap-top", "cap-center", "cap-bottom");
+    capBar.classList.add(`cap-${pos}`);
+    capBar.classList.toggle("hidden", !$("captionsToggle").checked);
+  }
+
   const statusEl = $("pipStatusLine");
   if (statusEl) {
-    statusEl.classList.toggle("active", enabled);
-    if (!enabled) {
+    statusEl.classList.toggle("active", enabled || isSplit);
+    if (isSplit) {
+      const partLabel = state.splitCamPosition === "bottom" ? "Down Part (Bottom 50%)" : "Up Part (Top 50%)";
+      statusEl.textContent = enabled
+        ? `Split 50/50: Face (${state.camSource}) in ${partLabel}`
+        : `Split 50/50: Auto Face in ${partLabel}`;
+    } else if (!enabled) {
       statusEl.textContent = "Cam Frame Off";
     } else if (state.camSource === "auto") {
       statusEl.textContent = `Auto Real-Face Fit (Anywhere) → Place ${state.camTarget}`;
@@ -197,6 +253,209 @@ async function copyText(btn, text, origLabel) {
   }
 }
 
+/* Creator Presets (localStorage) */
+function readSavedProfiles() {
+  try {
+    const raw = localStorage.getItem(PROFILES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSavedProfiles(map) {
+  try {
+    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function captureCurrentPreset() {
+  return {
+    numClips: state.numClips,
+    aspectRatio: state.aspectRatio,
+    captionsOn: $("captionsToggle").checked,
+    highlightColor: state.highlightColor,
+    captionLanguage: state.captionLanguage,
+    captionStyle: $("captionStyleSelect").value,
+    captionPosition: $("captionPosSelect").value,
+    captionScale: $("captionScaleSelect").value,
+    camSource: $("camSourceSelect").value,
+    camTarget: state.camTarget,
+    splitCamPosition: state.splitCamPosition,
+    captionMode: $("captionModeSelect").value,
+    clipDuration: $("clipDurSelect").value,
+    quality: $("qualitySelect").value,
+    watermark: $("watermarkInput").value.trim(),
+    hookBanner: $("hookBannerInput").value.trim(),
+    encoderMode: $("encoderModeSelect").value,
+    musicVolume: $("musicVolumeInput").value,
+    audioBoost: $("audioBoostToggle").checked,
+    trimSilence: $("trimSilenceToggle").checked,
+    keepSource: $("keepSourceToggle").checked,
+    useSourceCache: $("useSourceCacheToggle").checked,
+    aiProvider: $("aiProviderSelect").value,
+    ollamaEnabled: $("ollamaEnabledToggle").checked,
+    ollamaModel: $("ollamaModelSelect").value,
+    ollamaTopic: $("ollamaTopicInput").value.trim(),
+  };
+}
+
+const DEFAULT_PRESET = {
+  numClips: 3,
+  aspectRatio: "9:16",
+  captionsOn: true,
+  highlightColor: "yellow",
+  captionLanguage: "auto",
+  captionStyle: "classic",
+  captionPosition: "bottom",
+  captionScale: "1.0",
+  camSource: "off",
+  camTarget: "top-right",
+  splitCamPosition: "top",
+  captionMode: "auto",
+  clipDuration: "35",
+  quality: "720p",
+  watermark: "",
+  hookBanner: "",
+  encoderMode: "auto",
+  musicVolume: "14",
+  audioBoost: true,
+  trimSilence: false,
+  keepSource: false,
+  useSourceCache: true,
+  aiProvider: "auto",
+  ollamaEnabled: false,
+  ollamaModel: "",
+  ollamaTopic: "",
+};
+
+function applyPreset(p) {
+  const cfg = { ...DEFAULT_PRESET, ...(p || {}) };
+  setClipCount(cfg.numClips);
+  state.aspectRatio = cfg.aspectRatio;
+  setActiveSeg("#aspectGroup", "aspect", cfg.aspectRatio);
+
+  $("captionsToggle").checked = Boolean(cfg.captionsOn);
+  $("captionsStatusText").textContent = cfg.captionsOn ? "Word Highlight ON" : "Captions OFF";
+  $("colorDots").style.opacity = cfg.captionsOn ? "1" : "0.35";
+  $("colorDots").style.pointerEvents = cfg.captionsOn ? "auto" : "none";
+
+  state.highlightColor = cfg.highlightColor;
+  document.querySelectorAll("#colorDots .c-dot").forEach((d) => {
+    d.classList.toggle("active", d.dataset.color === cfg.highlightColor);
+  });
+
+  state.captionLanguage = cfg.captionLanguage;
+  setActiveSeg("#langGroup", "lang", cfg.captionLanguage);
+
+  $("captionStyleSelect").value = cfg.captionStyle;
+  $("captionPosSelect").value = cfg.captionPosition;
+  $("captionScaleSelect").value = cfg.captionScale;
+  $("camSourceSelect").value = cfg.camSource;
+  state.camTarget = cfg.camTarget;
+  document.querySelectorAll("#camTargetGroup .corner-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.corner === cfg.camTarget);
+  });
+  state.splitCamPosition = cfg.splitCamPosition || "top";
+  setActiveSeg("#splitPosGroup", "splitpos", state.splitCamPosition);
+  $("captionModeSelect").value = cfg.captionMode;
+  $("clipDurSelect").value = String(cfg.clipDuration);
+  $("qualitySelect").value = cfg.quality;
+  $("watermarkInput").value = cfg.watermark || "";
+  $("hookBannerInput").value = cfg.hookBanner || "";
+  $("encoderModeSelect").value = cfg.encoderMode || "auto";
+  $("musicVolumeInput").value = String(cfg.musicVolume || "14");
+  $("musicVolVal").textContent = `${$("musicVolumeInput").value}%`;
+  $("audioBoostToggle").checked = Boolean(cfg.audioBoost);
+  $("trimSilenceToggle").checked = Boolean(cfg.trimSilence);
+  $("keepSourceToggle").checked = Boolean(cfg.keepSource);
+  $("useSourceCacheToggle").checked = Boolean(cfg.useSourceCache);
+  $("aiProviderSelect").value = cfg.aiProvider || "auto";
+  renderLocalAiModels(state.localAiInfo);
+  $("ollamaEnabledToggle").checked = Boolean(cfg.ollamaEnabled);
+  if (cfg.ollamaModel && [...$("ollamaModelSelect").options].some((o) => o.value === cfg.ollamaModel)) {
+    $("ollamaModelSelect").value = cfg.ollamaModel;
+  }
+  $("ollamaTopicInput").value = cfg.ollamaTopic || "";
+  updatePipDiagram();
+}
+
+function refreshProfileSelect(selectedName = "__default__") {
+  const profiles = readSavedProfiles();
+  const sel = $("profileSelect");
+  sel.innerHTML = `<option value="__default__">Default Studio</option>`;
+  for (const name of Object.keys(profiles).sort()) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  sel.value = profiles[selectedName] ? selectedName : "__default__";
+  $("deleteProfileBtn").classList.toggle("hidden", sel.value === "__default__");
+}
+
+function renderLocalAiModels(localAi) {
+  const info = localAi || { available: false, ollama: { available: false, models: [] }, lmstudio: { available: false, models: [] }, models: [] };
+  state.localAiInfo = info;
+
+  const badge = $("ollamaBadge");
+  const sel = $("ollamaModelSelect");
+  const provider = $("aiProviderSelect")?.value || "auto";
+  if (!badge || !sel) return;
+
+  const olCount = (info.ollama?.models || []).length;
+  const lmCount = (info.lmstudio?.models || []).length;
+  const olOn = Boolean(info.ollama?.available);
+  const lmOn = Boolean(info.lmstudio?.available);
+
+  const filtered = (info.models || []).filter((item) => provider === "auto" || item.provider === provider);
+  const prevVal = sel.value;
+
+  badge.classList.toggle("loaded", filtered.length > 0 || (olOn && provider !== "lmstudio") || (lmOn && provider !== "ollama"));
+  if (olOn && lmOn) {
+    badge.textContent = `Ollama (${olCount}) + LM Studio (${lmCount})`;
+  } else if (lmOn) {
+    badge.textContent = lmCount ? `LM Studio Ready (${lmCount})` : "LM Studio Running (Load Model)";
+  } else if (olOn) {
+    badge.textContent = olCount ? `Ollama Ready (${olCount})` : "Ollama Running (No Models)";
+  } else {
+    badge.textContent = "Local AI Offline";
+  }
+
+  sel.innerHTML = "";
+  if (filtered.length) {
+    for (const item of filtered) {
+      const o = document.createElement("option");
+      o.value = item.value;
+      o.textContent = item.label;
+      sel.appendChild(o);
+    }
+    if (prevVal && [...sel.options].some((o) => o.value === prevVal)) {
+      sel.value = prevVal;
+    }
+  } else if (provider === "lmstudio") {
+    sel.innerHTML = `<option value="">${lmOn ? "Load a model in LM Studio Local Server" : "LM Studio server not detected on :1234"}</option>`;
+  } else if (provider === "ollama") {
+    sel.innerHTML = `<option value="">${olOn ? "Pull a model in Ollama first" : "Ollama server not detected on :11434"}</option>`;
+  } else {
+    sel.innerHTML = `<option value="">Start Ollama (:11434) or LM Studio (:1234)</option>`;
+  }
+}
+
+async function refreshLocalAiStatus() {
+  try {
+    const res = await fetch("/api/local-ai/status");
+    if (!res.ok) return;
+    const data = await res.json();
+    renderLocalAiModels(data);
+  } catch {
+    // Ignore optional local AI scan error
+  }
+}
+
 async function checkHealth() {
   try {
     const res = await fetch("/api/health");
@@ -209,8 +468,92 @@ async function checkHealth() {
       pill.innerHTML = `<span class="dot"></span>Offline Model Auto-Caches on Fallback`;
     }
     updateCookiesBadge(data.cookies_file_loaded);
+
+    // Annotate GPU encoders in select
+    const gpus = new Set(data.available_gpu_encoders || []);
+    const encSel = $("encoderModeSelect");
+    if (encSel) {
+      const labels = {
+        nvenc: gpus.has("nvenc") ? "NVIDIA NVENC (Ready)" : "NVIDIA NVENC (Not Detected)",
+        qsv: gpus.has("qsv") ? "Intel Quick Sync (Ready)" : "Intel Quick Sync (Not Detected)",
+        amf: gpus.has("amf") ? "AMD AMF (Ready)" : "AMD AMF (Not Detected)",
+      };
+      for (const opt of encSel.options) {
+        if (labels[opt.value]) {
+          opt.textContent = labels[opt.value];
+          opt.disabled = !gpus.has(opt.value);
+        }
+      }
+    }
+
+    // Local AI (Ollama + LM Studio)
+    const fallbackLocalAi = data.local_ai || {
+      available: Boolean(data.ollama?.available),
+      ollama: data.ollama || { available: false, models: [] },
+      lmstudio: data.lmstudio || { available: false, models: [] },
+      models: (data.ollama?.models || []).map((m) => ({
+        provider: "ollama",
+        id: m,
+        value: `ollama::${m}`,
+        label: `Ollama • ${m}`,
+      })),
+    };
+    renderLocalAiModels(fallbackLocalAi);
+
+    const cacheBtn = $("clearSourceCacheBtn");
+    if (cacheBtn && typeof data.source_cache_count === "number") {
+      cacheBtn.textContent = `(Clear ${data.source_cache_count} cached)`;
+    }
   } catch {
     $("offlineModelPill").textContent = "Server Connecting...";
+  }
+}
+
+async function refreshQueue() {
+  try {
+    const res = await fetch("/api/queue");
+    if (!res.ok) return;
+    const active = await res.json();
+    const sec = $("queueSection");
+    const list = $("queueList");
+    if (!active.length) {
+      sec.classList.add("hidden");
+      list.innerHTML = "";
+      if (state.queueTimer) {
+        clearInterval(state.queueTimer);
+        state.queueTimer = null;
+      }
+      return;
+    }
+
+    list.innerHTML = "";
+    for (const j of active) {
+      const row = document.createElement("div");
+      row.className = "queue-item";
+      row.innerHTML = `
+        <div class="queue-item-info" title="Click to watch this job">
+          <div class="queue-item-title">${escapeHtml(j.video_title || j.platform || j.job_id)}</div>
+          <div class="queue-item-sub">${escapeHtml(j.stage)} • ${j.progress}% — ${escapeHtml(j.message)}</div>
+        </div>
+        <button type="button" class="btn-ghost-danger btn-xs js-q-cancel">Cancel</button>
+      `;
+      row.querySelector(".queue-item-info").addEventListener("click", () => {
+        state.currentJobId = j.job_id;
+        updateProgressUI(j);
+        startListening(j.job_id);
+      });
+      row.querySelector(".js-q-cancel").addEventListener("click", async () => {
+        await fetch(`/api/jobs/${j.job_id}/cancel`, { method: "POST" });
+        refreshQueue();
+      });
+      list.appendChild(row);
+    }
+    sec.classList.remove("hidden");
+    if (!state.queueTimer) {
+      state.queueTimer = setInterval(refreshQueue, 1600);
+    }
+  } catch {
+    // Ignore optional queue poll errors
   }
 }
 
@@ -219,18 +562,24 @@ async function loadHistory() {
     const res = await fetch("/api/jobs");
     if (!res.ok) return;
     const jobs = await res.json();
-    if (!jobs.length) return;
+    const sec = $("historySection");
     const list = $("historyList");
     list.innerHTML = "";
+    if (!jobs.length) {
+      sec.classList.add("hidden");
+      return;
+    }
     for (const j of jobs) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "history-chip";
-      btn.innerHTML = `
-        <div class="hc-title">${escapeHtml(j.video_title || j.job_id)}</div>
-        <div class="hc-meta">${escapeHtml(j.platform || "Video")} • ${j.clips.length} clips</div>
+      const wrap = document.createElement("div");
+      wrap.className = "history-item";
+      wrap.innerHTML = `
+        <button type="button" class="history-chip" title="Open exported clips">
+          <div class="hc-title">${escapeHtml(j.video_title || j.job_id)}</div>
+          <div class="hc-meta">${escapeHtml(j.platform || "Video")} • ${j.clips.length} clips</div>
+        </button>
+        <button type="button" class="hc-del-btn" title="Delete export folder">✕</button>
       `;
-      btn.addEventListener("click", () => {
+      wrap.querySelector(".history-chip").addEventListener("click", () => {
         state.currentJobId = j.job_id;
         anchorJobOutputAfter(
           j.platform === "Pre-Edited Reel"
@@ -240,9 +589,17 @@ async function loadHistory() {
         renderClips(j);
         $("resultsSection").scrollIntoView({ behavior: "smooth" });
       });
-      list.appendChild(btn);
+      wrap.querySelector(".hc-del-btn").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await fetch(`/api/jobs/${j.job_id}`, { method: "DELETE" });
+        if (state.currentJobId === j.job_id) {
+          $("resultsSection").classList.add("hidden");
+        }
+        loadHistory();
+      });
+      list.appendChild(wrap);
     }
-    $("historySection").classList.remove("hidden");
+    sec.classList.remove("hidden");
   } catch {
     // Ignore optional history failures
   }
@@ -301,6 +658,8 @@ function captionSourceLabel(src) {
       return "Custom Script Sync (Zero AI)";
     case "offline_whisper_tiny":
       return "Inbuilt Offline Whisper-Tiny";
+    case "edited_manual":
+      return "Edited Captions";
     default:
       return "No Captions";
   }
@@ -309,6 +668,17 @@ function captionSourceLabel(src) {
 function renderClips(job) {
   $("aiNote").textContent = job.ai_note || "";
   $("downloadAllBtn").href = `/api/jobs/${job.job_id}/download-all`;
+  const srcBtn = $("downloadSourceBtn");
+  if (srcBtn) {
+    if (job.source_video_url) {
+      srcBtn.href = job.source_video_url;
+      srcBtn.download = job.source_video_name || "source.mp4";
+      srcBtn.classList.remove("hidden");
+    } else {
+      srcBtn.classList.add("hidden");
+    }
+  }
+
   const grid = $("clipsGrid");
   grid.innerHTML = "";
 
@@ -317,7 +687,7 @@ function renderClips(job) {
     card.className = "clip-card";
     const reasonsHtml = (clip.reasons || []).map((r) => `<span class="reason-tag">${escapeHtml(r)}</span>`).join("");
     const srtBtn = clip.srt_url
-      ? `<a class="dl-srt" href="${clip.srt_url}" download="${clip.srt_filename || `clip_${clip.rank}.srt`}">Download .SRT</a>`
+      ? `<a class="dl-srt js-dl-srt" href="${clip.srt_url}" download="${clip.srt_filename || `clip_${clip.rank}.srt`}">Download .SRT</a>`
       : "";
 
     const social = clip.social || {
@@ -329,9 +699,18 @@ function renderClips(job) {
       copy_all_facebook: "",
     };
     const tagsStr = (social.hashtags || []).join(" ");
+    const editableWordsText = (clip.words && clip.words.length)
+      ? clip.words.map((w) => w.word).join(" ")
+      : (clip.transcript_preview || "");
 
     card.innerHTML = `
       <div class="clip-video-wrap">
+        <button type="button" class="safe-zone-toggle js-sz-btn" title="Preview TikTok / Reels / Shorts safe zones">Safe Zones</button>
+        <div class="safe-zone-overlay hidden js-sz-overlay">
+          <div class="sz-top"></div>
+          <div class="sz-right"></div>
+          <div class="sz-bottom">UI / Caption Safe Zone</div>
+        </div>
         <video controls playsinline preload="metadata" poster="${clip.thumb_url || ""}">
           <source src="${clip.video_url}" type="video/mp4" />
         </video>
@@ -341,8 +720,39 @@ function renderClips(job) {
           <span class="clip-rank">Clip #${clip.rank}</span>
           <span class="score-pill">Score ${clip.score}/100</span>
         </div>
-        <div class="clip-time">${fmtTime(clip.start)} – ${fmtTime(clip.end)} (${Math.round(clip.duration)}s) • ${captionSourceLabel(clip.caption_source)}</div>
+        <div class="clip-time js-clip-time">${fmtTime(clip.start)} – ${fmtTime(clip.end)} (${Math.round(clip.duration)}s) • ${captionSourceLabel(clip.caption_source)}</div>
         <div class="reason-list">${reasonsHtml}</div>
+
+        <button type="button" class="btn-ghost btn-xs js-toggle-edit" style="justify-content:flex-start;">✂ Trim &amp; Edit Captions</button>
+
+        <div class="clip-edit-panel hidden js-edit-panel">
+          <div class="clip-trim-row">
+            <div class="trim-field">
+              <label>Start (s)</label>
+              <div class="trim-ctrl">
+                <button type="button" class="trim-nudge js-s-minus">-1s</button>
+                <input type="number" step="0.5" min="0" class="js-trim-start" value="${clip.start}" />
+                <button type="button" class="trim-nudge js-s-plus">+1s</button>
+              </div>
+            </div>
+            <div class="trim-field">
+              <label>End (s)</label>
+              <div class="trim-ctrl">
+                <button type="button" class="trim-nudge js-e-minus">-1s</button>
+                <input type="number" step="0.5" min="0.5" class="js-trim-end" value="${clip.end}" />
+                <button type="button" class="trim-nudge js-e-plus">+1s</button>
+              </div>
+            </div>
+          </div>
+          <div class="trim-field">
+            <label>Edit Caption Words</label>
+            <textarea rows="2" class="js-edit-text" placeholder="Edit words to fix spelling or wording...">${escapeHtml(editableWordsText)}</textarea>
+          </div>
+          <div class="clip-edit-actions">
+            <span class="mini-status js-edit-msg">Re-burns this clip from cached source</span>
+            <button type="button" class="btn-secondary btn-xs js-save-edit">Re-burn Clip</button>
+          </div>
+        </div>
 
         <div class="social-box">
           <div class="social-head">
@@ -368,12 +778,82 @@ function renderClips(job) {
         </div>
 
         <div class="clip-actions">
-          <a class="dl-mp4" href="${clip.video_url}" download="${clip.filename}">Download MP4</a>
+          <a class="dl-mp4 js-dl-mp4" href="${clip.video_url}" download="${clip.filename}">Download MP4</a>
           ${srtBtn}
         </div>
       </div>
     `;
 
+    // Safe-zone preview toggle
+    const szBtn = card.querySelector(".js-sz-btn");
+    const szOverlay = card.querySelector(".js-sz-overlay");
+    szBtn.addEventListener("click", () => {
+      const on = szOverlay.classList.toggle("hidden");
+      szBtn.classList.toggle("active", !on);
+    });
+
+    // Inline Trim & Caption Editor
+    const editPanel = card.querySelector(".js-edit-panel");
+    const toggleEditBtn = card.querySelector(".js-toggle-edit");
+    const startInput = card.querySelector(".js-trim-start");
+    const endInput = card.querySelector(".js-trim-end");
+    const textArea = card.querySelector(".js-edit-text");
+    const editMsg = card.querySelector(".js-edit-msg");
+    const saveEditBtn = card.querySelector(".js-save-edit");
+
+    toggleEditBtn.addEventListener("click", () => editPanel.classList.toggle("hidden"));
+    card.querySelector(".js-s-minus").addEventListener("click", () => {
+      startInput.value = Math.max(0, Number(startInput.value || 0) - 1).toFixed(1);
+    });
+    card.querySelector(".js-s-plus").addEventListener("click", () => {
+      startInput.value = (Number(startInput.value || 0) + 1).toFixed(1);
+    });
+    card.querySelector(".js-e-minus").addEventListener("click", () => {
+      endInput.value = Math.max(1, Number(endInput.value || 1) - 1).toFixed(1);
+    });
+    card.querySelector(".js-e-plus").addEventListener("click", () => {
+      endInput.value = (Number(endInput.value || 1) + 1).toFixed(1);
+    });
+
+    saveEditBtn.addEventListener("click", async () => {
+      saveEditBtn.disabled = true;
+      saveEditBtn.textContent = "Re-burning...";
+      editMsg.textContent = "Rendering updated clip...";
+      try {
+        const res = await fetch(`/api/jobs/${job.job_id}/clips/${clip.rank}/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            start: Number(startInput.value),
+            end: Number(endInput.value),
+            caption_text: textArea.value,
+          }),
+        });
+        const updated = await res.json();
+        if (!res.ok) throw new Error(updated.detail || "Could not update clip.");
+
+        const videoEl = card.querySelector("video");
+        videoEl.poster = updated.thumb_url || "";
+        videoEl.querySelector("source").src = updated.video_url;
+        videoEl.load();
+
+        card.querySelector(".js-clip-time").textContent =
+          `${fmtTime(updated.start)} – ${fmtTime(updated.end)} (${Math.round(updated.duration)}s) • ${captionSourceLabel(updated.caption_source)}`;
+        card.querySelector(".js-dl-mp4").href = updated.video_url;
+        const srtEl = card.querySelector(".js-dl-srt");
+        if (srtEl && updated.srt_url) srtEl.href = updated.srt_url;
+        editMsg.textContent = "Updated!";
+        editMsg.classList.add("loaded");
+      } catch (err) {
+        editMsg.textContent = err.message;
+        editMsg.classList.remove("loaded");
+      } finally {
+        saveEditBtn.disabled = false;
+        saveEditBtn.textContent = "Re-burn Clip";
+      }
+    });
+
+    // Social copy tabs
     let activePlatform = "yt";
     const tabBtns = card.querySelectorAll(".s-tab");
     const capEl = card.querySelector(".js-caption");
@@ -425,6 +905,10 @@ function updateProgressUI(job) {
   $("progressPct").textContent = `${job.progress}%`;
   $("progressFill").style.width = `${job.progress}%`;
   $("progressMsg").textContent = job.message;
+  const cancelBtn = $("cancelCurrentJobBtn");
+  if (cancelBtn) {
+    cancelBtn.classList.toggle("hidden", !["queued", "running"].includes(job.status));
+  }
 }
 
 function startListening(jobId) {
@@ -439,15 +923,17 @@ function startListening(jobId) {
     updateProgressUI(job);
     if (job.status === "completed") {
       es.close();
-      $("generateBtn").disabled = false;
-      if ($("reelSubmitBtn")) $("reelSubmitBtn").disabled = false;
       renderClips(job);
       loadHistory();
+      refreshQueue();
+      checkHealth();
     } else if (job.status === "failed") {
       es.close();
-      $("generateBtn").disabled = false;
-      if ($("reelSubmitBtn")) $("reelSubmitBtn").disabled = false;
       showError(job.error || "Failed to generate clips.");
+      refreshQueue();
+    } else if (job.status === "cancelled") {
+      es.close();
+      refreshQueue();
     }
   };
 
@@ -459,27 +945,66 @@ function startListening(jobId) {
       const job = await res.json();
       updateProgressUI(job);
       if (job.status === "completed") {
-        $("generateBtn").disabled = false;
-        if ($("reelSubmitBtn")) $("reelSubmitBtn").disabled = false;
         renderClips(job);
         loadHistory();
+        refreshQueue();
+        checkHealth();
       } else if (job.status === "failed") {
-        $("generateBtn").disabled = false;
-        if ($("reelSubmitBtn")) $("reelSubmitBtn").disabled = false;
         showError(job.error || "Failed to generate clips.");
+        refreshQueue();
+      } else if (job.status === "cancelled") {
+        refreshQueue();
       } else {
         setTimeout(() => startListening(jobId), 1200);
       }
     } catch {
-      $("generateBtn").disabled = false;
-      if ($("reelSubmitBtn")) $("reelSubmitBtn").disabled = false;
+      refreshQueue();
     }
+  };
+}
+
+function buildClipRequestPayload(url) {
+  return {
+    url,
+    num_clips: state.numClips,
+    highlighted_captions: $("captionsToggle").checked,
+    caption_language: state.captionLanguage,
+    aspect_ratio: state.aspectRatio,
+    highlight_color: state.highlightColor,
+    caption_style: $("captionStyleSelect").value,
+    caption_position: $("captionPosSelect").value,
+    caption_scale: Number($("captionScaleSelect").value || 1.0),
+    caption_mode: $("captionModeSelect").value,
+    clip_duration: Number($("clipDurSelect").value),
+    quality: $("qualitySelect").value,
+    manual_start: parseTimeInput($("manualStartInput").value),
+    manual_end: parseTimeInput($("manualEndInput").value),
+    trim_silence: $("trimSilenceToggle").checked,
+    hook_banner: $("hookBannerInput").value.trim(),
+    streamer_cam_source: $("camSourceSelect").value,
+    streamer_cam_target: state.camTarget,
+    split_cam_position: state.splitCamPosition,
+    watermark_text: $("watermarkInput").value.trim(),
+    audio_boost: $("audioBoostToggle").checked,
+    keep_source: $("keepSourceToggle").checked,
+    use_source_cache: $("useSourceCacheToggle").checked,
+    encoder_mode: $("encoderModeSelect").value,
+    music_volume: Number($("musicVolumeInput").value || 14) / 100.0,
+    bg_music_id: state.bgMusicId || "",
+    ai_provider: $("aiProviderSelect").value || "auto",
+    ollama_enabled: $("ollamaEnabledToggle").checked,
+    ollama_model: $("ollamaModelSelect").value || "",
+    ollama_topic: $("ollamaTopicInput").value.trim(),
+    cookies_browser: $("cookiesBrowserSelect")?.value || "",
   };
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   checkHealth();
   loadHistory();
+  refreshQueue();
+  refreshProfileSelect();
+
   const outputCorners = new Set(["top-left", "top-right", "bottom-left", "bottom-right"]);
   if ($("camSourceSelect").value && outputCorners.has($("camSourceSelect").value)) {
     state.camTarget = $("camSourceSelect").value;
@@ -488,6 +1013,91 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
   updatePipDiagram();
+
+  $("refreshLocalAiBtn").addEventListener("click", refreshLocalAiStatus);
+  $("aiProviderSelect").addEventListener("change", () => renderLocalAiModels(state.localAiInfo));
+
+  // Presets handlers
+  $("profileSelect").addEventListener("change", (e) => {
+    const val = e.target.value;
+    if (val === "__default__") {
+      applyPreset(DEFAULT_PRESET);
+      $("deleteProfileBtn").classList.add("hidden");
+    } else {
+      const profiles = readSavedProfiles();
+      if (profiles[val]) applyPreset(profiles[val]);
+      $("deleteProfileBtn").classList.remove("hidden");
+    }
+  });
+  $("saveProfileBtn").addEventListener("click", () => {
+    $("profileSaveBox").classList.toggle("hidden");
+    $("profileNameInput").focus();
+  });
+  $("cancelSaveProfileBtn").addEventListener("click", () => {
+    $("profileSaveBox").classList.add("hidden");
+  });
+  $("confirmSaveProfileBtn").addEventListener("click", () => {
+    const name = $("profileNameInput").value.trim();
+    if (!name) return;
+    const profiles = readSavedProfiles();
+    profiles[name] = captureCurrentPreset();
+    writeSavedProfiles(profiles);
+    refreshProfileSelect(name);
+    $("profileNameInput").value = "";
+    $("profileSaveBox").classList.add("hidden");
+  });
+  $("deleteProfileBtn").addEventListener("click", () => {
+    const val = $("profileSelect").value;
+    if (val === "__default__") return;
+    const profiles = readSavedProfiles();
+    delete profiles[val];
+    writeSavedProfiles(profiles);
+    refreshProfileSelect("__default__");
+    applyPreset(DEFAULT_PRESET);
+  });
+
+  // Batch queue drawer
+  $("batchQueueToggleBtn").addEventListener("click", () => {
+    $("batchBox").classList.toggle("hidden");
+  });
+  $("cancelBatchBtn").addEventListener("click", () => {
+    $("batchBox").classList.add("hidden");
+  });
+  $("submitBatchBtn").addEventListener("click", async () => {
+    clearError();
+    const lines = $("batchUrlsInput").value
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!lines.length) {
+      showError("Paste one or more video links (one per line) to add to the batch queue.");
+      return;
+    }
+    anchorJobOutputAfter($("clipForm").closest(".hero-card"));
+    let firstJob = null;
+    for (const link of lines) {
+      try {
+        const res = await fetch("/api/clips", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildClipRequestPayload(link)),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Invalid link: ${link}`);
+        if (!firstJob) firstJob = data;
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+    if (firstJob) {
+      $("batchUrlsInput").value = "";
+      $("batchBox").classList.add("hidden");
+      state.currentJobId = firstJob.job_id;
+      updateProgressUI(firstJob);
+      startListening(firstJob.job_id);
+      refreshQueue();
+    }
+  });
 
   $("pasteBtn").addEventListener("click", async () => {
     try {
@@ -511,26 +1121,30 @@ document.addEventListener("DOMContentLoaded", () => {
     $("captionsStatusText").textContent = on ? "Word Highlight ON" : "Captions OFF";
     $("colorDots").style.opacity = on ? "1" : "0.35";
     $("colorDots").style.pointerEvents = on ? "auto" : "none";
+    updatePipDiagram();
   });
 
-  document.querySelectorAll(".c-dot").forEach((dot) => {
+  $("captionPosSelect").addEventListener("change", updatePipDiagram);
+
+  document.querySelectorAll("#colorDots .c-dot").forEach((dot) => {
     dot.addEventListener("click", () => {
       state.highlightColor = dot.dataset.color;
-      document.querySelectorAll(".c-dot").forEach((d) => d.classList.toggle("active", d === dot));
+      document.querySelectorAll("#colorDots .c-dot").forEach((d) => d.classList.toggle("active", d === dot));
     });
   });
 
   document.querySelectorAll("#aspectGroup .seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.aspectRatio = btn.dataset.aspect;
-      document.querySelectorAll("#aspectGroup .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      setActiveSeg("#aspectGroup", "aspect", state.aspectRatio);
+      updatePipDiagram();
     });
   });
 
   document.querySelectorAll("#langGroup .seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.captionLanguage = btn.dataset.lang;
-      document.querySelectorAll("#langGroup .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      setActiveSeg("#langGroup", "lang", state.captionLanguage);
     });
   });
 
@@ -554,6 +1168,59 @@ document.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll("#camTargetGroup .corner-btn").forEach((b) => b.classList.toggle("active", b === btn));
       updatePipDiagram();
     });
+  });
+
+  document.querySelectorAll("#splitPosGroup .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.splitCamPosition = btn.dataset.splitpos;
+      setActiveSeg("#splitPosGroup", "splitpos", state.splitCamPosition);
+      updatePipDiagram();
+    });
+  });
+
+  // Background Music Upload
+  $("musicVolumeInput").addEventListener("input", (e) => {
+    $("musicVolVal").textContent = `${e.target.value}%`;
+  });
+  $("uploadMusicBtn").addEventListener("click", () => $("bgMusicInput").click());
+  $("bgMusicInput").addEventListener("change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    clearError();
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      const res = await fetch("/api/music/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to upload audio track.");
+      state.bgMusicId = data.bg_music_id;
+      $("musicSelectedName").textContent = data.filename;
+      $("musicSelectedName").classList.add("loaded");
+      $("clearMusicBtn").classList.remove("hidden");
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      $("bgMusicInput").value = "";
+    }
+  });
+  $("clearMusicBtn").addEventListener("click", () => {
+    state.bgMusicId = "";
+    $("musicSelectedName").textContent = "None selected";
+    $("musicSelectedName").classList.remove("loaded");
+    $("clearMusicBtn").classList.add("hidden");
+  });
+
+  $("clearSourceCacheBtn").addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await fetch("/api/cache/sources", { method: "DELETE" });
+    checkHealth();
+  });
+
+  $("cancelCurrentJobBtn").addEventListener("click", async () => {
+    if (!state.currentJobId) return;
+    await fetch(`/api/jobs/${state.currentJobId}/cancel`, { method: "POST" });
+    refreshQueue();
   });
 
   $("openFolderBtn").addEventListener("click", async () => {
@@ -633,12 +1300,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("pasteCookiesToggleBtn").addEventListener("click", () => {
     $("cookiesPasteBox").classList.toggle("hidden");
   });
-
-  if ($("cancelPasteCookiesBtn")) {
-    $("cancelPasteCookiesBtn").addEventListener("click", () => {
-      $("cookiesPasteBox").classList.add("hidden");
-    });
-  }
+  $("cancelPasteCookiesBtn").addEventListener("click", () => {
+    $("cookiesPasteBox").classList.add("hidden");
+  });
 
   $("saveCookiesTextBtn").addEventListener("click", async () => {
     clearError();
@@ -670,8 +1334,14 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    const mStart = parseTimeInput($("manualStartInput").value);
+    const mEnd = parseTimeInput($("manualEndInput").value);
+    if (mStart !== null && mEnd !== null && mEnd <= mStart + 0.5) {
+      showError("Manual End Time must be greater than Manual Start Time.");
+      return;
+    }
+
     anchorJobOutputAfter($("clipForm").closest(".hero-card"));
-    $("generateBtn").disabled = true;
     $("resultsSection").classList.add("hidden");
     $("clipsGrid").innerHTML = "";
 
@@ -685,31 +1355,33 @@ document.addEventListener("DOMContentLoaded", () => {
         fd.append("caption_language", state.captionLanguage);
         fd.append("aspect_ratio", state.aspectRatio);
         fd.append("highlight_color", state.highlightColor);
+        fd.append("caption_style", $("captionStyleSelect").value);
+        fd.append("caption_position", $("captionPosSelect").value);
+        fd.append("caption_scale", $("captionScaleSelect").value);
         fd.append("caption_mode", $("captionModeSelect").value);
         fd.append("clip_duration", $("clipDurSelect").value);
         fd.append("quality", $("qualitySelect").value);
+        if (mStart !== null) fd.append("manual_start", String(mStart));
+        if (mEnd !== null) fd.append("manual_end", String(mEnd));
+        fd.append("trim_silence", String($("trimSilenceToggle").checked));
+        fd.append("hook_banner", $("hookBannerInput").value.trim());
         fd.append("streamer_cam_source", $("camSourceSelect").value);
         fd.append("streamer_cam_target", state.camTarget);
+        fd.append("split_cam_position", state.splitCamPosition);
         fd.append("watermark_text", $("watermarkInput").value.trim());
         fd.append("audio_boost", String($("audioBoostToggle").checked));
+        fd.append("keep_source", String($("keepSourceToggle").checked));
+        fd.append("use_source_cache", String($("useSourceCacheToggle").checked));
+        fd.append("encoder_mode", $("encoderModeSelect").value);
+        fd.append("music_volume", String(Number($("musicVolumeInput").value || 14) / 100.0));
+        fd.append("bg_music_id", state.bgMusicId || "");
+        fd.append("ai_provider", $("aiProviderSelect").value || "auto");
+        fd.append("ollama_enabled", String($("ollamaEnabledToggle").checked));
+        fd.append("ollama_model", $("ollamaModelSelect").value || "");
+        fd.append("ollama_topic", $("ollamaTopicInput").value.trim());
         res = await fetch("/api/clips/upload", { method: "POST", body: fd });
       } else {
-        const payload = {
-          url,
-          num_clips: state.numClips,
-          highlighted_captions: $("captionsToggle").checked,
-          caption_language: state.captionLanguage,
-          aspect_ratio: state.aspectRatio,
-          highlight_color: state.highlightColor,
-          caption_mode: $("captionModeSelect").value,
-          clip_duration: Number($("clipDurSelect").value),
-          quality: $("qualitySelect").value,
-          streamer_cam_source: $("camSourceSelect").value,
-          streamer_cam_target: state.camTarget,
-          watermark_text: $("watermarkInput").value.trim(),
-          audio_boost: $("audioBoostToggle").checked,
-          cookies_browser: $("cookiesBrowserSelect")?.value || "",
-        };
+        const payload = buildClipRequestPayload(url);
         res = await fetch("/api/clips", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -721,8 +1393,8 @@ document.addEventListener("DOMContentLoaded", () => {
       state.currentJobId = data.job_id;
       updateProgressUI(data);
       startListening(data.job_id);
+      refreshQueue();
     } catch (err) {
-      $("generateBtn").disabled = false;
       showError(err.message);
     }
   });
@@ -777,7 +1449,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("#reelLangGroup .seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.reelLanguage = btn.dataset.lang;
-      document.querySelectorAll("#reelLangGroup .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      setActiveSeg("#reelLangGroup", "lang", state.reelLanguage);
     });
   });
 
@@ -791,7 +1463,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("#reelAspectGroup .seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.reelAspect = btn.dataset.aspect;
-      document.querySelectorAll("#reelAspectGroup .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      setActiveSeg("#reelAspectGroup", "aspect", state.reelAspect);
     });
   });
 
@@ -833,7 +1505,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll("#donateAmountGroup .seg-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         state.donateAmount = btn.dataset.amt;
-        document.querySelectorAll("#donateAmountGroup .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        setActiveSeg("#donateAmountGroup", "amt", state.donateAmount);
         const isCustom = state.donateAmount === "custom";
         $("donateCustomWrap").classList.toggle("hidden", !isCustom);
         if (isCustom) $("donateCustomInput").focus();
@@ -856,8 +1528,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     anchorJobOutputAfter($("reelCaptionSection"));
-    $("reelSubmitBtn").disabled = true;
-    $("generateBtn").disabled = true;
     $("resultsSection").classList.add("hidden");
     $("clipsGrid").innerHTML = "";
 
@@ -870,6 +1540,15 @@ document.addEventListener("DOMContentLoaded", () => {
     fd.append("custom_script", $("reelScriptInput").value.trim());
     fd.append("watermark_text", $("reelWatermarkInput").value.trim());
     fd.append("audio_boost", String($("reelAudioBoostToggle").checked));
+    fd.append("caption_style", $("captionStyleSelect").value);
+    fd.append("caption_position", $("captionPosSelect").value);
+    fd.append("caption_scale", $("captionScaleSelect").value);
+    fd.append("hook_banner", $("reelHookBannerInput").value.trim());
+    fd.append("trim_silence", String($("reelTrimSilenceToggle").checked));
+    fd.append("keep_source", String($("keepSourceToggle").checked));
+    fd.append("encoder_mode", $("encoderModeSelect").value);
+    fd.append("bg_music_id", state.bgMusicId || "");
+    fd.append("music_volume", String(Number($("musicVolumeInput").value || 14) / 100.0));
 
     try {
       const res = await fetch("/api/reels/caption", { method: "POST", body: fd });
@@ -879,9 +1558,8 @@ document.addEventListener("DOMContentLoaded", () => {
       updateProgressUI(data);
       $("progressCard").scrollIntoView({ behavior: "smooth" });
       startListening(data.job_id);
+      refreshQueue();
     } catch (err) {
-      $("reelSubmitBtn").disabled = false;
-      $("generateBtn").disabled = false;
       $("reelErrorBanner").textContent = err.message;
       $("reelErrorBanner").classList.remove("hidden");
     }

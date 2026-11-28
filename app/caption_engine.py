@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Literal
 
@@ -13,6 +14,8 @@ from app.models import (
     AspectRatio,
     CaptionEngineMode,
     CaptionLanguage,
+    CaptionPosition,
+    CaptionStyle,
     HighlightColor,
     TranscriptSegment,
     WordTimestamp,
@@ -50,11 +53,29 @@ HINGLISH_WORDS: dict[str, str] = {
     "करना": "karna", "करते": "karte", "करता": "karta", "करती": "karti", "करो": "karo",
     "रहा": "raha", "रही": "rahi", "रहे": "rahe", "वाला": "wala", "वाले": "wale", "वाली": "wali",
     "बहुत": "bahut", "अच्छा": "accha", "अच्छे": "acche", "अच्छी": "acchi",
-    "सब": "sab", "कुछ": "kuch", "सिर्फ": "sirf", "अभी": "abhi", "आज": "aaj", "कल": "kal",
-    "जब": "jab", "तब": "tab", "यहाँ": "yahan", "वहाँ": "wahan", "भाई": "bhai", "दोस्त": "dost",
-    "यार": "yaar", "लोग": "log", "बात": "baat", "देखो": "dekho", "सुनो": "suno",
-    "बताओ": "batao", "समझ": "samajh", "क्योंकि": "kyunki", "इसलिए": "isliye",
+    "सब": "sab", "सबसे": "sabse", "कुछ": "kuch", "सिर्फ": "sirf", "अभी": "abhi", "आज": "aaj", "कल": "kal",
+    "जब": "jab", "तब": "tab", "यहाँ": "yahan", "वहाँ": "wahan", "भाई": "bhai", "दोस्त": "dost", "दोस्तों": "doston",
+    "यार": "yaar", "लोग": "log", "लोगों": "logon", "बात": "baat", "बातें": "baatein", "देखो": "dekho", "सुनो": "suno",
+    "बताओ": "batao", "समझ": "samajh", "समझो": "samjho", "क्योंकि": "kyunki", "इसलिए": "isliye",
     "थोड़ा": "thoda", "ज़्यादा": "zyada", "ज्यादा": "zyada", "एक": "ek", "दो": "do", "तीन": "teen",
+    "बड़ा": "bada", "बड़ी": "badi", "बड़े": "bade", "छोटा": "chhota", "छोटी": "chhoti",
+    "गलत": "galat", "गलती": "galti", "सही": "sahi", "मज़ा": "maza", "मजा": "maza", "हाल": "haal",
+    "वीडियो": "video", "चैनल": "channel", "सब्सक्राइब": "subscribe", "लाइक": "like", "शेयर": "share",
+    "कमेंट": "comment", "बिल्कुल": "bilkul", "असली": "asli", "नकली": "nakli", "जल्दी": "jaldi",
+    "शुरू": "shuru", "ख़त्म": "khatam", "खत्म": "khatam", "मतलब": "matlab", "चलो": "chalo", "चलिए": "chaliye",
+    "हमेशा": "hamesha", "कभी": "kabhi", "फिर": "phir", "फ़िर": "phir", "कैसे": "kaise", "ऐसे": "aise",
+    "वैसे": "waise", "जैसे": "jaise", "कितना": "kitna", "कितने": "kitne", "पहला": "pehla", "पहले": "pehle",
+    "दूसरा": "doosra", "दूसरे": "doosre", "नया": "naya", "नई": "nayi", "नयी": "nayi", "पुराना": "purana",
+    "दुनिया": "duniya", "ज़िंदगी": "zindagi", "जिंदगी": "zindagi", "पैसे": "paise", "पैसा": "paisa",
+    "काम": "kaam", "नाम": "naam", "समय": "samay", "वक्त": "waqt", "वक़्त": "waqt", "दिन": "din", "रात": "raat",
+    "साथ": "saath", "पास": "paas", "दूर": "door", "अंदर": "andar", "बाहर": "bahar", "ऊपर": "upar", "नीचे": "neeche",
+    "सामने": "saamne", "पीछे": "peeche", "बिना": "bina", "जरूरी": "zaroori", "ज़रूरी": "zaroori",
+    "ज़रूर": "zaroor", "जरूर": "zaroor", "शायद": "shayad", "पता": "pata", "लगता": "lagta", "मिलता": "milta",
+    "मुझको": "mujhko", "मुझे": "mujhe", "तुम्हें": "tumhein", "आपको": "aapko", "सबको": "sabko",
+    "हमारा": "hamara", "हमारे": "hamare", "हमारी": "hamari", "तुम्हारा": "tumhara", "मेरा": "mera",
+    "मेरे": "mere", "मेरी": "meri", "अपना": "apna", "अपने": "apne", "अपनी": "apni",
+    "करेंगे": "karenge", "करूंगा": "karunga", "करूँगा": "karunga", "आया": "aaya", "दिया": "diya", "लिया": "liya", "किया": "kiya",
+    "फ़ायदा": "fayda", "फायदा": "fayda", "नुक़सान": "nuksaan", "नुकसान": "nuksaan", "आसान": "aasaan", "मुश्किल": "mushkil",
 }
 
 _DEVA_VOWELS = {
@@ -73,23 +94,34 @@ _DEVA_CONSONANTS = {
     "प": "p", "फ": "ph", "ब": "b", "भ": "bh", "म": "m",
     "य": "y", "र": "r", "ल": "l", "व": "v",
     "श": "sh", "ष": "sh", "स": "s", "ह": "h",
-    "क़": "q", "ख़": "kh", "ग़": "gh", "ज़": "z", "ड़": "r", "ढ़": "rh", "फ़": "f", "य़": "y",
+    "\u0958": "q", "\u0959": "kh", "\u095a": "gh", "\u095b": "z", "\u095c": "r", "\u095d": "rh", "\u095e": "f", "\u095f": "y",
     "ळ": "l",
+}
+_NUKTA_PRECOMPOSE = {
+    "\u0915\u093c": "\u0958",
+    "\u0916\u093c": "\u0959",
+    "\u0917\u093c": "\u095a",
+    "\u091c\u093c": "\u095b",
+    "\u0921\u093c": "\u095c",
+    "\u0922\u093c": "\u095d",
+    "\u092b\u093c": "\u095e",
+    "\u092f\u093c": "\u095f",
 }
 _DEVA_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 
 
 def _transliterate_deva_word(word: str) -> str:
     """Phonetic Devanagari-to-Hinglish transliterator for a single word."""
-    stripped = word.strip(".,!?;:\"'()[]")
+    norm_word = unicodedata.normalize("NFC", word)
+    stripped = norm_word.strip(".,!?;:\"'()[]")
     if stripped in HINGLISH_WORDS:
-        return word.replace(stripped, HINGLISH_WORDS[stripped])
+        return norm_word.replace(stripped, HINGLISH_WORDS[stripped])
 
-    # Normalize nukta pairs before iterating
-    w = word.translate(_DEVA_DIGITS)
-    nukta_map = {"क\u093c": "क़", "ख\u093c": "ख़", "ग\u093c": "ग़", "ज\u093c": "ज़", "ड\u093c": "ड़", "ढ\u093c": "ढ़", "फ\u093c": "फ़", "य\u093c": "य़"}
-    for seq, comp in nukta_map.items():
+    w = norm_word.translate(_DEVA_DIGITS)
+    for seq, comp in _NUKTA_PRECOMPOSE.items():
         w = w.replace(seq, comp)
+    # Strip any rare non-standard nukta after consonants so attached matras still match cleanly
+    w = w.replace("\u093c", "")
 
     out: list[str] = []
     i = 0
@@ -103,7 +135,8 @@ def _transliterate_deva_word(word: str) -> str:
                 out.append(base)
                 i += 2
             elif nxt in _DEVA_MATRAS:
-                out.append(base + _DEVA_MATRAS[nxt])
+                matra = "i" if (nxt == "ी" and i + 2 >= n) else _DEVA_MATRAS[nxt]
+                out.append(base + matra)
                 i += 2
             else:
                 # Apply natural Hindi schwa deletion at word end (when preceded by another consonant/vowel)
@@ -287,6 +320,30 @@ def extract_clip_words_from_youtube(
     return words, source
 
 
+HINDI_DEVANAGARI_PROMPT = "नमस्ते दोस्तों, आज के इस वीडियो में हम बात करेंगे।"
+
+
+def _words_match_requested_language(words: list[WordTimestamp], caption_language: CaptionLanguage) -> bool:
+    """Ensure cached/downloaded platform captions actually match the user's chosen language script."""
+    if not words or caption_language == CaptionLanguage.AUTO:
+        return bool(words)
+    joined = " ".join(w.word for w in words)
+    alpha_chars = [ch for ch in joined if ch.isalpha()]
+    if not alpha_chars:
+        return True
+    deva_count = sum(1 for ch in alpha_chars if "\u0900" <= ch <= "\u097F")
+    latin_count = sum(1 for ch in alpha_chars if ("a" <= ch.lower() <= "z"))
+    total = len(alpha_chars)
+
+    if caption_language == CaptionLanguage.HINDI:
+        return (deva_count / total) >= 0.20
+    if caption_language == CaptionLanguage.ENGLISH:
+        return (latin_count / total) >= 0.45
+    if caption_language == CaptionLanguage.HINGLISH:
+        return ((deva_count + latin_count) / total) >= 0.35
+    return True
+
+
 def transcribe_clip_offline_tiny(
     video_path: Path,
     clip_start: float,
@@ -317,18 +374,48 @@ def transcribe_clip_offline_tiny(
     model = _get_offline_whisper()
 
     whisper_lang: str | None = None
+    whisper_task: str = "transcribe"
+    initial_prompt: str | None = None
+
+    try:
+        detected_lang, detected_prob, _ = model.detect_language(audio_np, vad_filter=True)
+    except Exception:
+        detected_lang, detected_prob = "", 0.0
+
     if caption_language == CaptionLanguage.ENGLISH:
-        whisper_lang = "en"
-    elif caption_language in (CaptionLanguage.HINDI, CaptionLanguage.HINGLISH):
+        if not detected_lang or detected_lang == "en" or detected_prob < 0.40:
+            whisper_lang = "en"
+            whisper_task = "transcribe"
+        else:
+            # Translate non-English audio (e.g. Hindi) cleanly into English captions
+            whisper_lang = detected_lang
+            whisper_task = "translate"
+    elif caption_language == CaptionLanguage.HINDI:
         whisper_lang = "hi"
+        whisper_task = "transcribe"
+        initial_prompt = HINDI_DEVANAGARI_PROMPT
+    elif caption_language == CaptionLanguage.HINGLISH:
+        if detected_lang == "en" and detected_prob >= 0.78:
+            whisper_lang = "en"
+            whisper_task = "transcribe"
+        else:
+            whisper_lang = "hi"
+            whisper_task = "transcribe"
+            initial_prompt = HINDI_DEVANAGARI_PROMPT
+    else:
+        if detected_lang in {"hi", "ur"}:
+            whisper_lang = "hi"
+            initial_prompt = HINDI_DEVANAGARI_PROMPT
 
     seg_iter, _ = model.transcribe(
         audio_np,
         language=whisper_lang,
+        task=whisper_task,
         beam_size=1,
         word_timestamps=True,
         vad_filter=True,
         condition_on_previous_text=False,
+        initial_prompt=initial_prompt,
     )
     words: list[WordTimestamp] = []
     for seg in seg_iter:
@@ -369,7 +456,7 @@ def get_clip_words(
     """Resolve word-level timestamps with Zero-AI captions first and inbuilt offline tiny fallback."""
     if mode != CaptionEngineMode.OFFLINE_AI and segments:
         yt_words, yt_source = extract_clip_words_from_youtube(segments, clip_start, clip_end, audio)
-        if yt_words:
+        if yt_words and (mode == CaptionEngineMode.NO_AI or _words_match_requested_language(yt_words, caption_language)):
             return _apply_language_format(yt_words, caption_language), yt_source, False
 
     if mode == CaptionEngineMode.NO_AI:
@@ -489,6 +576,74 @@ def _escape_ass(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", r"\{").replace("}", r"\}")
 
 
+def remap_words_after_jump_cuts(
+    words: list[WordTimestamp],
+    keep_intervals: list[tuple[float, float]],
+) -> list[WordTimestamp]:
+    """Remap clip-relative [0, dur] word timestamps onto a jump-cut compacted timeline."""
+    if not words or not keep_intervals:
+        return words
+
+    # Precompute cumulative output offsets for each kept interval
+    mapped_intervals: list[tuple[float, float, float]] = []
+    acc = 0.0
+    for a, b in keep_intervals:
+        if b > a + 0.02:
+            mapped_intervals.append((a, b, acc))
+            acc += b - a
+    if not mapped_intervals:
+        return words
+
+    remapped: list[WordTimestamp] = []
+    for w in words:
+        best_iv: tuple[float, float, float] | None = None
+        best_overlap = -1.0
+        for a, b, off in mapped_intervals:
+            ov = min(w.end, b) - max(w.start, a)
+            if ov > best_overlap:
+                best_overlap = ov
+                best_iv = (a, b, off)
+        if best_iv is None or best_overlap <= 0.01:
+            # Attach to nearest kept interval edge if word landed right on a cut pad
+            mid = (w.start + w.end) / 2.0
+            nearest = min(mapped_intervals, key=lambda iv: min(abs(mid - iv[0]), abs(mid - iv[1])))
+            a, b, off = nearest
+            t0 = off + max(0.0, min(b - a - 0.06, mid - a))
+            t1 = min(off + (b - a), t0 + max(0.06, min(0.35, w.end - w.start)))
+        else:
+            a, b, off = best_iv
+            t0 = off + max(0.0, w.start - a)
+            t1 = off + min(b - a, w.end - a)
+        if t1 > t0 + 0.02:
+            remapped.append(WordTimestamp(word=w.word, start=round(t0, 3), end=round(t1, 3)))
+    return remapped
+
+
+def align_edited_text_to_words(
+    edited_text: str,
+    existing_words: list[WordTimestamp],
+    clip_duration: float,
+    audio: AudioAnalysis | None = None,
+    caption_language: CaptionLanguage = CaptionLanguage.AUTO,
+) -> list[WordTimestamp]:
+    """Align user-edited caption text onto existing word timings (preserving cadence when counts match)."""
+    tokens = [tok for tok in re.split(r"\s+", edited_text.strip()) if tok]
+    if not tokens:
+        return []
+    if existing_words and len(tokens) == len(existing_words):
+        out = [
+            WordTimestamp(word=tok, start=orig.start, end=orig.end)
+            for tok, orig in zip(tokens, existing_words)
+        ]
+        return _apply_language_format(out, caption_language)
+
+    s_start = existing_words[0].start if existing_words else 0.1
+    s_end = existing_words[-1].end if existing_words else max(0.5, clip_duration - 0.1)
+    s_end = max(s_start + 0.3, min(clip_duration, s_end))
+    paced = _pace_segment_words_by_audio(" ".join(tokens), s_start, s_end, audio)
+    return _apply_language_format(paced, caption_language)
+
+
 def write_highlighted_ass_and_srt(
     words: list[WordTimestamp],
     ass_path: Path,
@@ -500,21 +655,65 @@ def write_highlighted_ass_and_srt(
     highlight_color: HighlightColor,
     caption_language: CaptionLanguage = CaptionLanguage.AUTO,
     watermark_text: str = "",
+    caption_style: CaptionStyle = CaptionStyle.CLASSIC,
+    caption_position: CaptionPosition = CaptionPosition.BOTTOM,
+    caption_scale: float = 1.0,
+    hook_banner: str = "",
 ) -> str:
-    """Write word-by-word highlighted .ass subtitle (plus optional watermark) and .srt file."""
+    """Write word-by-word highlighted .ass subtitle (plus optional watermark & hook banner) and .srt file."""
     is_vertical = (video_h >= video_w) if aspect_ratio == AspectRatio.ORIGINAL else (aspect_ratio != AspectRatio.LANDSCAPE)
-    font_size = int(round(video_h * (0.044 if is_vertical else 0.068)))
-    margin_v = int(round(video_h * (0.18 if is_vertical else 0.075)))
+    scale = max(0.75, min(1.4, float(caption_scale)))
+    base_ratio = 0.044 if is_vertical else 0.068
+    if caption_style == CaptionStyle.MINIMAL:
+        base_ratio *= 0.86
+    elif caption_style == CaptionStyle.POP:
+        base_ratio *= 1.08
+
+    font_size = int(round(video_h * base_ratio * scale))
+    clean_hook = re.sub(r"\s+", " ", hook_banner).strip()
+    if caption_position == CaptionPosition.CENTER:
+        alignment = 5
+        margin_v = 0
+    elif caption_position == CaptionPosition.TOP:
+        alignment = 8
+        margin_v = int(round(video_h * (0.21 if (clean_hook and is_vertical) else (0.13 if is_vertical else 0.075))))
+    else:
+        alignment = 2
+        margin_v = int(round(video_h * (0.18 if is_vertical else 0.075)))
+
     margin_lr = int(round(video_w * 0.07))
-    outline = max(3, int(round(font_size * 0.09)))
-    shadow = max(2, int(round(font_size * 0.045)))
     accent_bgr = HIGHLIGHT_COLORS[highlight_color]
+
+    if caption_style == CaptionStyle.BOXED:
+        bold_flag = -1
+        border_style = 3
+        outline = max(7, int(round(font_size * 0.22)))
+        shadow = 0
+        outline_col = "&HC8000000&"
+        back_col = "&HC8000000&"
+    elif caption_style == CaptionStyle.MINIMAL:
+        bold_flag = 0
+        border_style = 1
+        outline = max(2, int(round(font_size * 0.06)))
+        shadow = 1
+        outline_col = "&H00000000&"
+        back_col = "&H66000000&"
+    else:
+        bold_flag = -1
+        border_style = 1
+        outline = max(3, int(round(font_size * (0.105 if caption_style == CaptionStyle.POP else 0.09))))
+        shadow = max(2, int(round(font_size * 0.045)))
+        outline_col = "&H00000000&"
+        back_col = "&H96000000&"
 
     has_devanagari = caption_language == CaptionLanguage.HINDI or any(DEVANAGARI_RE.search(w.word) for w in words)
     font_name = "Nirmala UI" if has_devanagari else "Arial"
 
     wm_size = max(18, int(round(video_h * 0.022)))
     wm_margin_v = max(18, int(round(video_h * 0.03)))
+    hook_size = max(22, int(round(video_h * (0.032 if is_vertical else 0.046))))
+    hook_margin_v = max(46, int(round(video_h * (0.085 if is_vertical else 0.065))))
+    hook_pad = max(8, int(round(hook_size * 0.24)))
 
     ass_header = f"""[Script Info]
 Title: Local ClipCraft by WPM
@@ -526,8 +725,9 @@ PlayResY: {video_h}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H96000000&,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{margin_lr},{margin_lr},{margin_v},1
+Style: Default,{font_name},{font_size},&H00FFFFFF&,&H00FFFFFF&,{outline_col},{back_col},{bold_flag},0,0,0,100,100,0,0,{border_style},{outline},{shadow},{alignment},{margin_lr},{margin_lr},{margin_v},1
 Style: Watermark,Arial,{wm_size},&H55FFFFFF&,&H55FFFFFF&,&H66000000&,&H00000000&,-1,0,0,0,100,100,0,0,1,2,1,8,20,20,{wm_margin_v},1
+Style: HookBanner,{font_name},{hook_size},&H0000E6FF&,&H0000E6FF&,&HD80F172A&,&HD80F172A&,-1,0,0,0,100,100,0,0,3,{hook_pad},0,8,{margin_lr},{margin_lr},{hook_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -539,11 +739,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     clean_wm = watermark_text.strip()
     if clean_wm:
         dialogue_lines.append(
-            f"Dialogue: 1,0:00:00.00,{_format_ass_time(clip_duration)},Watermark,,0,0,0,,{_escape_ass(clean_wm)}"
+            f"Dialogue: 2,0:00:00.00,{_format_ass_time(clip_duration)},Watermark,,0,0,0,,{_escape_ass(clean_wm)}"
         )
 
-    max_words = 4 if is_vertical else 6
-    max_chars = 22 if is_vertical else 38
+    if clean_hook:
+        hook_end = min(4.5, max(1.0, clip_duration))
+        dialogue_lines.append(
+            f"Dialogue: 1,0:00:00.00,{_format_ass_time(hook_end)},HookBanner,,0,0,0,,{_escape_ass(clean_hook)}"
+        )
+
+    if caption_style == CaptionStyle.POP:
+        max_words = 2 if is_vertical else 3
+        max_chars = 14 if is_vertical else 24
+    else:
+        max_words = 4 if is_vertical else 6
+        max_chars = 22 if is_vertical else 38
     groups = _group_words_into_lines(words, max_words=max_words, max_chars=max_chars)
     prev_cs_end = 0
 
@@ -555,9 +765,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"{grp_idx}\n{_format_srt_time(grp_start)} --> {_format_srt_time(grp_end)}\n{plain_line}\n"
         )
 
-        # Keep Devanagari unmodified; uppercase Latin English/Hinglish for crisp viral captions
+        # Keep Devanagari and Minimal style unmodified; uppercase Latin English/Hinglish for punchy captions
         display_tokens = [
-            _escape_ass(w.word.strip() if DEVANAGARI_RE.search(w.word) else w.word.strip().upper())
+            _escape_ass(
+                w.word.strip()
+                if (DEVANAGARI_RE.search(w.word) or caption_style == CaptionStyle.MINIMAL)
+                else w.word.strip().upper()
+            )
             for w in grp
         ]
         for idx, w in enumerate(grp):
@@ -569,7 +783,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             styled_parts = []
             for j, tok in enumerate(display_tokens):
                 if j == idx:
-                    styled_parts.append(f"{{\\c{accent_bgr}\\fscx109\\fscy109}}{tok}{{\\r}}")
+                    if caption_style == CaptionStyle.POP:
+                        styled_parts.append(f"{{\\c{accent_bgr}\\fscx118\\fscy118\\t(0,90,\\fscx106\\fscy106)}}{tok}{{\\r}}")
+                    elif caption_style == CaptionStyle.MINIMAL:
+                        styled_parts.append(f"{{\\c{accent_bgr}\\b1}}{tok}{{\\r}}")
+                    else:
+                        styled_parts.append(f"{{\\c{accent_bgr}\\fscx109\\fscy109}}{tok}{{\\r}}")
                 else:
                     styled_parts.append(tok)
             line_text = " ".join(styled_parts)

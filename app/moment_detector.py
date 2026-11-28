@@ -230,6 +230,67 @@ def _score_transcript_window(
     return float(np.clip(total, 0.0, 1.0)), tags, preview
 
 
+def compute_speech_keep_intervals(
+    audio: AudioAnalysis,
+    clip_start: float,
+    clip_end: float,
+    min_silence_dur: float = 0.65,
+    pad: float = 0.14,
+) -> tuple[list[tuple[float, float]], float]:
+    """
+    Identify clip-relative [0, clip_dur] intervals to KEEP when trimming long dead-air pauses.
+    Returns (intervals, trimmed_ratio). Falls back to full clip if no significant silence exists.
+    """
+    clip_dur = max(0.5, clip_end - clip_start)
+    if len(audio.silence_mask_10hz) < 5:
+        return [(0.0, round(clip_dur, 3))], 0.0
+
+    i0 = max(0, int(math.floor(clip_start * audio.sample_rate_hz)))
+    i1 = min(len(audio.silence_mask_10hz), int(math.ceil(clip_end * audio.sample_rate_hz)))
+    if i1 - i0 < 6:
+        return [(0.0, round(clip_dur, 3))], 0.0
+
+    sil = audio.silence_mask_10hz[i0:i1]
+    if bool(np.all(sil)):
+        return [(0.0, round(clip_dur, 3))], 0.0
+
+    # Collect raw active speech runs (relative to clip_start)
+    raw_active: list[tuple[float, float]] = []
+    idx = 0
+    n = len(sil)
+    while idx < n:
+        if not sil[idx]:
+            j = idx
+            while j < n and not sil[j]:
+                j += 1
+            s_rel = max(0.0, (idx / audio.sample_rate_hz) - pad)
+            e_rel = min(clip_dur, (j / audio.sample_rate_hz) + pad)
+            if e_rel > s_rel + 0.05:
+                raw_active.append((s_rel, e_rel))
+            idx = j
+        else:
+            idx += 1
+
+    if not raw_active:
+        return [(0.0, round(clip_dur, 3))], 0.0
+
+    # Merge intervals separated by short pauses (< min_silence_dur)
+    merged: list[list[float]] = [[raw_active[0][0], raw_active[0][1]]]
+    for s_rel, e_rel in raw_active[1:]:
+        if s_rel - merged[-1][1] < min_silence_dur:
+            merged[-1][1] = max(merged[-1][1], e_rel)
+        else:
+            merged.append([s_rel, e_rel])
+
+    keep = [(round(a, 3), round(b, 3)) for a, b in merged if b - a >= 0.25]
+    kept_total = sum(b - a for a, b in keep)
+    removed = clip_dur - kept_total
+    if not keep or removed < 0.45 or kept_total < max(1.2, clip_dur * 0.2):
+        return [(0.0, round(clip_dur, 3))], 0.0
+
+    return keep, round(max(0.0, min(0.85, removed / clip_dur)), 3)
+
+
 def _find_pause_points(audio: AudioAnalysis, segments: list[TranscriptSegment], duration: float) -> list[float]:
     """Collect natural cut points from transcript gaps and 10 Hz audio silence valleys."""
     points: set[float] = {0.0, round(duration, 2)}
@@ -291,6 +352,9 @@ def detect_best_moments(
     target_duration: int = 35,
     heatmap: list[dict[str, float]] | None = None,
     segments: list[TranscriptSegment] | None = None,
+    ollama_model: str = "",
+    ollama_topic: str = "",
+    ai_provider: str = "auto",
 ) -> tuple[list[MomentCandidate], AudioAnalysis]:
     """
     Pick top N non-overlapping highlight moments using strictly deterministic (Zero-AI) signals:
@@ -420,8 +484,30 @@ def detect_best_moments(
             for i in range(num_clips)
         ], audio
 
-    # Sort descending by score and apply greedy NMS + pause snapping
+    # Sort descending by score; if opt-in local Ollama topic search is active, re-rank spaced windows
     raw_candidates.sort(key=lambda c: c["combined"], reverse=True)
+    if ollama_model.strip() and ollama_topic.strip() and has_transcript:
+        from app.ollama_service import score_topic_relevance
+
+        spaced: list[dict] = []
+        for c in raw_candidates:
+            if not c["preview"]:
+                continue
+            if any(abs(c["start"] - ex["start"]) < max(8.0, base_dur * 0.5) for ex in spaced):
+                continue
+            spaced.append(c)
+            if len(spaced) >= 8:
+                break
+        if spaced:
+            topic_scores = score_topic_relevance(ollama_model, ollama_topic, spaced, provider=ai_provider)
+            for idx, score_val in topic_scores.items():
+                if 0 <= idx < len(spaced):
+                    c_ref = spaced[idx]
+                    c_ref["combined"] = 0.42 * c_ref["combined"] + 0.58 * score_val
+                    if score_val >= 0.45:
+                        c_ref["t_tags"] = [f"Topic: {ollama_topic.strip()[:22]}"] + list(c_ref["t_tags"])
+            raw_candidates.sort(key=lambda c: c["combined"], reverse=True)
+
     selected: list[MomentCandidate] = []
     min_gap = 2.0 if duration > 90 else 0.5
 

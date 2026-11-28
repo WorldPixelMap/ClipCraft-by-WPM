@@ -6,6 +6,7 @@ import ipaddress
 import json
 import re
 import shutil
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -192,33 +193,57 @@ def _select_caption_languages(
     info: dict[str, Any],
     preferred_language: CaptionLanguage = CaptionLanguage.AUTO,
 ) -> list[str]:
-    """Pick preferred caption language codes respecting requested English/Hindi/Hinglish preference."""
+    """Pick preferred caption language codes strictly respecting English/Hindi/Hinglish preference."""
     manual = info.get("subtitles") or {}
     auto = info.get("automatic_captions") or {}
     orig_lang = (info.get("language") or "").split("-")[0].lower()
 
+    def _has_track(code: str) -> bool:
+        return bool(code and (code in manual or code in auto))
+
+    def _all_matching(predicate) -> list[str]:
+        found: list[str] = []
+        for source in (manual, auto):
+            for code in source.keys():
+                if predicate(code) and code not in found:
+                    found.append(code)
+        return found
+
     if preferred_language == CaptionLanguage.ENGLISH:
-        priority = ["en", "en-IN", "en-US", "en-GB", "en-orig"]
-    elif preferred_language == CaptionLanguage.HINDI:
-        priority = ["hi", "hi-IN", "hi-orig"]
-    elif preferred_language == CaptionLanguage.HINGLISH:
-        priority = ["hi-Latn", "en-IN", "hi", "hi-IN", "en", "en-US"]
-    else:
-        priority = [orig_lang, "en", "en-IN", "en-US", "en-GB", "en-orig", "hi", "hi-IN"]
+        priority = ["en", "en-orig", "en-IN", "en-US", "en-GB"]
+        candidates = [c for c in priority if _has_track(c)]
+        for c in _all_matching(lambda k: k.lower() == "en" or k.lower().startswith("en-")):
+            if c not in candidates:
+                candidates.append(c)
+        return candidates[:6]
 
-    candidates: list[str] = []
-    for lang in priority:
-        if lang and (lang in manual or lang in auto) and lang not in candidates:
-            candidates.append(lang)
+    if preferred_language == CaptionLanguage.HINDI:
+        priority = ["hi", "hi-orig", "hi-IN"]
+        candidates = [c for c in priority if _has_track(c)]
+        for c in _all_matching(
+            lambda k: (k.lower() == "hi" or k.lower().startswith("hi-")) and "latn" not in k.lower()
+        ):
+            if c not in candidates:
+                candidates.append(c)
+        return candidates[:6]
 
-    # Also include non-translated original tracks from manual or auto captions
+    if preferred_language == CaptionLanguage.HINGLISH:
+        # Prefer Romanized Hindi (hi-Latn) or Devanagari Hindi (transliterated cleanly to Hinglish)
+        priority = ["hi-Latn", "hi", "hi-orig", "hi-IN"]
+        candidates = [c for c in priority if _has_track(c)]
+        for c in _all_matching(lambda k: k.lower() == "hi" or k.lower().startswith("hi-")):
+            if c not in candidates:
+                candidates.append(c)
+        return candidates[:6]
+
+    priority = [orig_lang, "en", "en-orig", "en-IN", "en-US", "en-GB", "hi", "hi-orig", "hi-IN"]
+    candidates = [c for c in priority if _has_track(c)]
     for source in (manual, auto):
         for lang in source.keys():
             if "-" in lang and lang not in {"en-US", "en-GB", "en-IN", "en-orig", "hi-IN", "hi-Latn", "pt-BR", "zh-Hans", "zh-Hant"}:
                 continue
             if lang not in candidates:
                 candidates.append(lang)
-
     return candidates[:8]
 
 
@@ -493,6 +518,78 @@ def parse_vtt_subtitles(path: Path) -> list[TranscriptSegment]:
     return segments
 
 
+def _parse_downloaded_subtitles(work_dir: Path, langs: list[str]) -> list[TranscriptSegment]:
+    """Parse downloaded json3/vtt subtitle files ordered by requested language priority."""
+    segments: list[TranscriptSegment] = []
+    json3_files: list[Path] = []
+    vtt_files: list[Path] = []
+    for lang in langs:
+        j_cand = work_dir / f"source.{lang}.json3"
+        v_cand = work_dir / f"source.{lang}.vtt"
+        if j_cand.exists():
+            json3_files.append(j_cand)
+        if v_cand.exists():
+            vtt_files.append(v_cand)
+    if not langs:
+        return []
+    if not json3_files:
+        for j_any in sorted(work_dir.glob("source*.json3")):
+            if j_any not in json3_files:
+                json3_files.append(j_any)
+    if not vtt_files:
+        for v_any in sorted(work_dir.glob("source*.vtt")):
+            if v_any not in vtt_files:
+                vtt_files.append(v_any)
+
+    if json3_files:
+        segments = parse_json3_subtitles(json3_files[0])
+    if (not segments or not any(s.has_word_timing for s in segments)) and vtt_files:
+        vtt_segments = parse_vtt_subtitles(vtt_files[0])
+        if vtt_segments and (not segments or any(s.has_word_timing for s in vtt_segments)):
+            segments = vtt_segments
+    return segments
+
+
+def fetch_captions_only(
+    url: str,
+    work_dir: Path,
+    preferred_language: CaptionLanguage = CaptionLanguage.AUTO,
+    cookies_browser: str = "",
+) -> list[TranscriptSegment]:
+    """Fetch only subtitles for a specific caption language (used when reusing cached source video)."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    for old_sub in work_dir.glob("source*.json3"):
+        old_sub.unlink(missing_ok=True)
+    for old_sub in work_dir.glob("source*.vtt"):
+        old_sub.unlink(missing_ok=True)
+
+    clean_url, platform = validate_video_url(url)
+    opts = _base_ydl_opts(cookies_browser=cookies_browser)
+    opts.update(
+        {
+            "skip_download": True,
+            "outtmpl": str(work_dir / "source.%(ext)s"),
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitlesformat": "json3/vtt/best",
+        }
+    )
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(clean_url, download=False)
+            inspection = _build_inspection_from_info(info, platform, preferred_language)
+            langs = list(inspection.caption_languages)
+            if not langs and preferred_language == CaptionLanguage.AUTO:
+                langs = ["en", "en-US", "en-GB"]
+            if not langs:
+                return []
+            ydl.params["subtitleslangs"] = langs[:2]
+            ydl.process_ie_result(info, download=True)
+            return _parse_downloaded_subtitles(work_dir, langs)
+    except Exception:
+        return []
+
+
 def download_video_and_captions(
     url: str,
     work_dir: Path,
@@ -502,12 +599,15 @@ def download_video_and_captions(
     preferred_language: CaptionLanguage = CaptionLanguage.AUTO,
     cookies_browser: str = "",
     inspection_cb: Callable[[VideoInspection], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[Path, list[TranscriptSegment], dict[str, Any], VideoInspection]:
     """Single-fetch download of video + captions (avoids hitting YouTube twice per job)."""
     work_dir.mkdir(parents=True, exist_ok=True)
     clean_url, platform = validate_video_url(url)
 
     def _hook(d: dict[str, Any]) -> None:
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Job cancelled by user.")
         if not progress_cb:
             return
         if d.get("status") == "downloading":
@@ -534,20 +634,28 @@ def download_video_and_captions(
             "outtmpl": out_template,
             "writesubtitles": True,
             "writeautomaticsub": True,
-            "subtitleslangs": preferred_langs[:1] if preferred_langs else [],
+            "subtitleslangs": preferred_langs[:2] if preferred_langs else [],
             "subtitlesformat": "json3/vtt/best",
             "progress_hooks": [_hook],
         }
     )
 
+    langs: list[str] = []
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
             inspection = _build_inspection_from_info(info, platform, preferred_language)
             if inspection_cb:
                 inspection_cb(inspection)
-            langs = [ln for ln in (preferred_langs or inspection.caption_languages or ["en", "en-US", "en-GB"]) if ln]
-            ydl.params["subtitleslangs"] = langs[:1] if langs else []
+            if preferred_langs:
+                langs = [ln for ln in preferred_langs if ln]
+            elif inspection.caption_languages:
+                langs = list(inspection.caption_languages)
+            elif preferred_language == CaptionLanguage.AUTO:
+                langs = ["en", "en-US", "en-GB"]
+            else:
+                langs = []
+            ydl.params["subtitleslangs"] = langs[:2] if langs else []
             ydl.params["writesubtitles"] = bool(langs)
             ydl.params["writeautomaticsub"] = bool(langs)
             ydl.process_ie_result(info, download=True)
@@ -562,28 +670,5 @@ def download_video_and_captions(
     if not video_path or not video_path.exists():
         raise FileNotFoundError("Downloaded video file could not be located.")
 
-    segments: list[TranscriptSegment] = []
-    json3_files: list[Path] = []
-    vtt_files: list[Path] = []
-    for lang in langs:
-        j_cand = work_dir / f"source.{lang}.json3"
-        v_cand = work_dir / f"source.{lang}.vtt"
-        if j_cand.exists():
-            json3_files.append(j_cand)
-        if v_cand.exists():
-            vtt_files.append(v_cand)
-    for j_any in sorted(work_dir.glob("source*.json3")):
-        if j_any not in json3_files:
-            json3_files.append(j_any)
-    for v_any in sorted(work_dir.glob("source*.vtt")):
-        if v_any not in vtt_files:
-            vtt_files.append(v_any)
-
-    if json3_files:
-        segments = parse_json3_subtitles(json3_files[0])
-    if (not segments or not any(s.has_word_timing for s in segments)) and vtt_files:
-        vtt_segments = parse_vtt_subtitles(vtt_files[0])
-        if vtt_segments and (not segments or any(s.has_word_timing for s in vtt_segments)):
-            segments = vtt_segments
-
+    segments = _parse_downloaded_subtitles(work_dir, langs)
     return video_path, segments, info or {}, inspection
